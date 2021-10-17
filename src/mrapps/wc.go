@@ -10,6 +10,7 @@ import "6.824/mr"
 import "unicode"
 import "strings"
 import "strconv"
+// import "fmt"
 
 //
 // The map function is called once for each file of input. The first
@@ -42,3 +43,11 @@ func Reduce(key string, values []string) string {
 	// return the number of occurrences of this word.
 	return strconv.Itoa(len(values))
 }
+
+// func main(){
+// 	res := Map("testFile","bus train bus train bus train train")
+// 	fmt.Println(res[0].Key,"  ", res[0].Value)
+// 	strArr := [] string {"1","1","!"}
+// 	testReduce := Reduce("bus", strArr)
+// 	fmt.Println(testReduce)
+// }

@@ -9,6 +9,16 @@ package mr
 import "os"
 import "strconv"
 
+type WorkRequest struct {
+	Req int 
+}
+
+type WorkReply struct {
+	MapTaskNum int
+	FileName string
+	Status int
+}
+
 //
 // example to show how to declare the arguments
 // and reply for an RPC.

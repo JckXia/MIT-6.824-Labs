@@ -4,6 +4,8 @@ import "fmt"
 import "log"
 import "net/rpc"
 import "hash/fnv"
+import "io/ioutil"
+import "os"
 
 
 //
@@ -30,12 +32,43 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
+ 
 	// Your worker implementation here.
+ 
+	WorkReply := AskForWork()
+	fileName := WorkReply.FileName
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+	file, err := os.Open(fileName)
+	if err != nil {
+		log.Fatalf("Cannot read %v", file)
+	}
+	fileContent, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("Cannot read %v", file)
+	}
+	// fmt.Print(string(fileContent))
+	res  := mapf(fileName, string(fileContent))
+	
+	key := res[0].Key
 
+	fmt.Println(ihash(key) % 10)	// Idea is, same keys will hash to the same file
+
+	file.Close()
+
+	fmt.Println("work reply ", WorkReply.Status)
+
+	// In the end we use ihash to write the temp file 
+}
+
+func AskForWork() WorkReply {
+	args := WorkRequest{101}
+
+	reply := WorkReply{}
+
+	call("Coordinator.WorkRequest", &args, &reply)
+
+	 
+	return reply
 }
 
 //
