@@ -24,11 +24,12 @@ type WorkReply struct {
 	TaskNum int
 	FileName string
 	TaskType string
+	Nreduce int
 }
 
 // TaskNum 
 type CompletionRequest struct {
-	TaskNum int
+	WorkerSock string
 }
 
 type CompletionReply struct {

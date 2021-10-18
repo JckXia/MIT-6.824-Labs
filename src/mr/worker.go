@@ -6,7 +6,7 @@ import "net/rpc"
 import "hash/fnv"
 import "io/ioutil"
 import "os"
-
+import "strconv"
 
 //
 // Map functions return a slice of KeyValue.
@@ -34,12 +34,15 @@ func ihash(key string) int {
 //
 
 // TODO all of these error messages MUST be handled by the coordinator in the futre
-func ProcessMapTask(fileName string, taskNum int, mapf func(string,string) []KeyValue) {
+func ProcessMapTask(fileName string, taskNum int, nReduce int , mapf func(string,string) []KeyValue) {
+	fmt.Println("Reading ", fileName)
 	file, err := os.Open(fileName)
 	if err != nil {
 		log.Fatalf("Cannot read %v ", fileName)
 	}
+
 	fileContent, err := ioutil.ReadAll(file)
+
 	if err != nil {
 		log.Fatalf("Cannot read %v ", fileName)
 	}
@@ -47,11 +50,36 @@ func ProcessMapTask(fileName string, taskNum int, mapf func(string,string) []Key
 	mapRes := mapf(fileName, string(fileContent))
 	file.Close()
 
-	fmt.Println(len(mapRes))
-	for i, ch := range mapRes {
-		fmt.Println(ch.Key, " ,",i)
-	}
+	buffer := make(map[string] string)
+
+	for _, ch := range mapRes {
+		reduceTaskNum := ihash(ch.Key) % nReduce
+		interFileName := "imr-"+ strconv.Itoa(taskNum) + "-"+ strconv.Itoa(reduceTaskNum)
+		kvPair := ch.Key + " " + ch.Value + "\n"
+		buffer[interFileName] += kvPair
+		if len(buffer[interFileName]) > 100 {
+			f, err := os.OpenFile(interFileName, os.O_APPEND | os.O_CREATE | os.O_WRONLY, 0644)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			f.WriteString(buffer[interFileName])
+			buffer[interFileName] = "" // Reset buffer
+		} 
+	 }
+
+	 // Clear out any remainants
+	 // Terrible solution!!
+	 for fileName, fileContent := range buffer {
+		f, err := os.OpenFile(fileName, os.O_APPEND | os.O_CREATE | os.O_WRONLY, 0644)
+		if err != nil {
+			log.Fatal(err)
+		}
+		f.WriteString(fileContent)
+	 }
+	 AckCompletion()
 }
+
 
 func ProcessReduceTask(taskNum int, reducef func(string, []string) string) {
 	// ONLY start processing after completion
@@ -62,13 +90,21 @@ func ProcessTask(mapf func(string,string)[]KeyValue, reducef func(string,[] stri
 	if workReply.TaskType == NO_TASK_AVAIL {
 		return 
 	} else if workReply.TaskType == MAP_TASK {
-		ProcessMapTask(workReply.FileName, workReply.TaskNum, mapf)
+		ProcessMapTask(workReply.FileName, workReply.TaskNum,  workReply.Nreduce,mapf)
 	} else if workReply.TaskType == REDUCE_TASK {
 		ProcessReduceTask(workReply.TaskNum, reducef)
 	}
 }
 
- 
+func AckCompletion() {
+	completionRequest := CompletionRequest{}
+	completionRequest.WorkerSock = workerSock()
+	reply := CompletionReply{}
+
+	call("Coordinator.TaskCompletion", &completionRequest, &reply)
+	
+} 
+
 func CallExample() {
 
 	// declare an argument structure.
