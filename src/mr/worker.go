@@ -16,6 +16,7 @@ type KeyValue struct {
 	Value string
 }
 
+
 //
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -29,53 +30,45 @@ func ihash(key string) int {
 
 //
 // main/mrworker.go calls this function.
+// Eventually we would need to spin up a server
 //
-func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
- 
-	// Your worker implementation here.
- 
-	WorkReply := AskForWork()
-	fileName := WorkReply.FileName
 
+// TODO all of these error messages MUST be handled by the coordinator in the futre
+func ProcessMapTask(fileName string, taskNum int, mapf func(string,string) []KeyValue) {
 	file, err := os.Open(fileName)
 	if err != nil {
-		log.Fatalf("Cannot read %v", file)
+		log.Fatalf("Cannot read %v ", fileName)
 	}
 	fileContent, err := ioutil.ReadAll(file)
 	if err != nil {
-		log.Fatalf("Cannot read %v", file)
+		log.Fatalf("Cannot read %v ", fileName)
 	}
-	// fmt.Print(string(fileContent))
-	res  := mapf(fileName, string(fileContent))
-	
-	key := res[0].Key
 
-	fmt.Println(ihash(key) % 10)	// Idea is, same keys will hash to the same file
-
+	mapRes := mapf(fileName, string(fileContent))
 	file.Close()
 
-	fmt.Println("work reply ", WorkReply.Status)
-
-	// In the end we use ihash to write the temp file 
+	fmt.Println(len(mapRes))
+	for i, ch := range mapRes {
+		fmt.Println(ch.Key, " ,",i)
+	}
 }
 
-func AskForWork() WorkReply {
-	args := WorkRequest{101}
-
-	reply := WorkReply{}
-
-	call("Coordinator.WorkRequest", &args, &reply)
-
-	 
-	return reply
+func ProcessReduceTask(taskNum int, reducef func(string, []string) string) {
+	// ONLY start processing after completion
 }
 
-//
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
+func ProcessTask(mapf func(string,string)[]KeyValue, reducef func(string,[] string) string) {
+	workReply := AskForWork()
+	if workReply.TaskType == NO_TASK_AVAIL {
+		return 
+	} else if workReply.TaskType == MAP_TASK {
+		ProcessMapTask(workReply.FileName, workReply.TaskNum, mapf)
+	} else if workReply.TaskType == REDUCE_TASK {
+		ProcessReduceTask(workReply.TaskNum, reducef)
+	}
+}
+
+ 
 func CallExample() {
 
 	// declare an argument structure.
@@ -93,6 +86,25 @@ func CallExample() {
 	// reply.Y should be 100.
 	fmt.Printf("reply.Y %v\n", reply.Y)
 }
+
+func Worker(mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string) {
+
+	ProcessTask(mapf, reducef)
+ 
+}
+
+func AskForWork() WorkReply {
+	args := WorkRequest{workerSock()}
+
+	reply := WorkReply{}
+
+	call("Coordinator.WorkRequest", &args, &reply)
+
+	return reply
+}
+
+ 
 
 //
 // send an RPC request to the coordinator, wait for the response.

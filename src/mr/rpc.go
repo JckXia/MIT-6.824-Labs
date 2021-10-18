@@ -9,15 +9,32 @@ package mr
 import "os"
 import "strconv"
 
+const (
+	REDUCE_TASK = "ReduceTask"
+	MAP_TASK = "MapTask"
+	NO_TASK_AVAIL = "NoTaskAvail"
+)
+
+
 type WorkRequest struct {
-	Req int 
+	WorkSock string
 }
 
 type WorkReply struct {
-	MapTaskNum int
+	TaskNum int
 	FileName string
+	TaskType string
+}
+
+// TaskNum 
+type CompletionRequest struct {
+	TaskNum int
+}
+
+type CompletionReply struct {
 	Status int
 }
+
 
 //
 // example to show how to declare the arguments
@@ -41,6 +58,13 @@ type ExampleReply struct {
 // Athena AFS doesn't support UNIX-domain sockets.
 func coordinatorSock() string {
 	s := "/var/tmp/824-mr-"
+	s += strconv.Itoa(os.Getuid())
+	return s
+}
+
+
+func workerSock() string {
+	s := "/var/tmp/824-mrw-";
 	s += strconv.Itoa(os.Getuid())
 	return s
 }

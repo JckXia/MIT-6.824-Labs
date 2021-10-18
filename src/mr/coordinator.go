@@ -10,13 +10,20 @@ import "fmt"
 
 
 /**
-	Task 1:
+	Task 1 : (Done)
 	Set up RPC connection between coordinator and worker so that
 	- Worker can request a task to coordinator.
 	- Coordinator, upon recv, checks for yet-to-do map tasks and
       send to worker
-	- Worker receives fileName, calls Map function provided by wc.so
+	- Worker receives fileName, calls Map function provided by wc.so 
 
+	Task 2:
+	Ability to spin up one worker and one coordinator, and that it is able to carry out a map reduce job
+	
+	map[TaskNum] = {
+		SocketName
+		Status="Mapping || Reducing || Idle" 
+	}
 **/
 
 // Coordinator will have some global state
@@ -48,15 +55,15 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 	defer c.mu.Unlock()
 	if c.mMapCnt >= 0{;
 		fmt.Println("c map count ", c.mMapCnt)
-		reply.MapTaskNum = c.mMapCnt
+		reply.TaskNum = c.mMapCnt
 		reply.FileName = c.mapTasks[c.mMapCnt]
-		reply.Status = 200 
+		reply.TaskType = MAP_TASK 
 
 		c.mMapCnt--; //TODO I think we should only invoke this when map op finishes
 	} else {
-		reply.MapTaskNum = 0
+		reply.TaskNum = 0
 		reply.FileName = ""
-		reply.Status = 500
+		reply.TaskType = REDUCE_TASK
 	}
 	
 	return nil
