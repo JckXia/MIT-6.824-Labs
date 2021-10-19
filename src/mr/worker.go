@@ -8,6 +8,8 @@ import "io/ioutil"
 import "os"
 import "strconv"
 import "time"
+import "strings"
+import "bufio"
 
 //
 // Map functions return a slice of KeyValue.
@@ -38,6 +40,7 @@ func ihash(key string) int {
 func ProcessMapTask(fileName string, taskNum int, nReduce int , mapf func(string,string) []KeyValue) {
 	fmt.Println("Reading ", fileName)
 	file, err := os.Open(fileName)
+
 	if err != nil {
 		log.Fatalf("Cannot read %v ", fileName)
 	}
@@ -55,7 +58,16 @@ func ProcessMapTask(fileName string, taskNum int, nReduce int , mapf func(string
 
 	for _, ch := range mapRes {
 		reduceTaskNum := ihash(ch.Key) % nReduce
-		interFileName := "imr-"+ strconv.Itoa(taskNum) + "-"+ strconv.Itoa(reduceTaskNum)
+		reduceDir := "./reduce-tasks-" + strconv.Itoa(reduceTaskNum); 
+
+		if _, err := os.Stat(reduceDir); os.IsNotExist(err) {
+			err := os.Mkdir(reduceDir, os.ModePerm)
+			if err != nil {
+				fmt.Println("Error creating directory ", reduceDir);
+			}
+		}
+
+		interFileName :=  reduceDir + "/imr-"+ strconv.Itoa(taskNum) + "-"+ strconv.Itoa(reduceTaskNum)
 		kvPair := ch.Key + " " + ch.Value + "\n"
 		buffer[interFileName] += kvPair
 		if len(buffer[interFileName]) > 100 {
@@ -82,14 +94,71 @@ func ProcessMapTask(fileName string, taskNum int, nReduce int , mapf func(string
 }
 
 // Find all files matching the
-//		imr-*-Y.out pattern
-//		Read contentS, Load into map<key, list(values)>
+//		imr-*-Y.out pattern (Solved, placing reducer under directory)
+//		Read contents, Load into map<key, list(values)>
 // 		iterate over map, load results into a 
 //		mr-out-Y file, where y is the reduce task
-func ProcessReduceTask(taskNum int, reducef func(string, []string) string) {
-	 fmt.Println("Running reduce task ", taskNum)
 
-	 AckCompletion()
+// Trade offs:
+//   At most R files
+//  1. Collect the contents as we iterate over the files
+func collecKvPairs(fileName string, kvPairs map [string] [] string) {
+	file, err := os.Open(fileName)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		 
+		words := strings.Fields(scanner.Text())
+		 
+		kvPairs[words[0]] = append(kvPairs[words[0]], words[1])
+	}
+	if err := scanner.Err(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func ProcessReduceTask(taskNum int, reducef func(string, []string) string) {
+
+	 dirName := "./reduce-tasks-" + strconv.Itoa(taskNum)
+	 files, err := ioutil.ReadDir(dirName)
+
+	 // The problem is that sometimes we might not write to
+	 // a reduce, because the we do not hash to that value
+	 if _, err := os.Stat(dirName); os.IsNotExist(err) {
+		// path/to/whatever does not exist
+		AckCompletion()
+		return
+	 }
+	 if err != nil {
+		 log.Fatal(err)
+	 }
+ 
+
+	 kvPairs := make(map[string][]string)
+
+	 for _, f := range files {
+		pathName := dirName + "/" + f.Name()
+		collecKvPairs(pathName, kvPairs)
+	 }
+
+	 f, err := os.Create("./mr-out-"+ strconv.Itoa(taskNum))
+	 defer f.Close()
+	
+	 //fmt.Println("Kv pair ", kvPairs)
+	 for key, value := range kvPairs {
+		  
+		 res := reducef(key, value)
+
+		 fmt.Fprintf(f, "%v %v\n", key, res);	
+	}
+ 	 
+	AckCompletion()
 }
 
 // We can implement AskForWork to
@@ -104,7 +173,7 @@ func ProcessTask(mapf func(string,string)[]KeyValue, reducef func(string,[] stri
 	for {
 		workReply := AskForWork()
 		if workReply.TaskType == NO_TASK_AVAIL {
-			time.Sleep(2 * time.Second);	// Sleep for two seconds
+			time.Sleep(2 * time.Second);	// Sleep for two seconds. More sophiscated solution would be to handle it from coord side
 		} else if workReply.TaskType == MAP_TASK {
 			ProcessMapTask(workReply.FileName, workReply.TaskNum,  workReply.Nreduce,mapf)
 		} else if workReply.TaskType == REDUCE_TASK {

@@ -1,1 +1,1 @@
-go run mrcoordinator.go ac-*.txt
+go run mrcoordinator.go pg-*.txt
