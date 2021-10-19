@@ -107,8 +107,10 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 
 		c.workerStatus[args.WorkSock] = WorkerStatus{reply.TaskNum,"Mapping"}
 		c.mMapAvailCnt--; 
-	} else if c.nReduceAvailCnt >= 0 {
-		// We have reduce tasks availlable
+	} else if c.nReduceAvailCnt >= 0 && c.mMapCompleteCnt == c.mMap {
+		// At this point, we have handed out all map tasks. 
+		// But we must also complete all map tasks before we can give out
+		// reducer work
 		reply.TaskNum = c.nReduceAvailCnt
 		reply.FileName = ""
 		reply.TaskType = REDUCE_TASK
@@ -116,11 +118,19 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 		
 		c.workerStatus[args.WorkSock] = WorkerStatus{reply.TaskNum,"Reducing"}
 		c.nReduceAvailCnt--;
+
 	} else {
+
 		reply.TaskNum = -1
 		reply.FileName = ""
-		reply.TaskType = NO_TASK_AVAIL
 		reply.Nreduce = c.nReduce
+ 
+		if c.mMapCompleteCnt == c.mMap && c.nReduceCompleteCnt == c.nReduce {
+			reply.TaskType = PLEASE_EXIT
+		} else {
+			reply.TaskType = NO_TASK_AVAIL
+		}
+		// Either way, it is idling
 		c.workerStatus[args.WorkSock] = WorkerStatus{reply.TaskNum, "Idle"}
 	}
 	
@@ -153,7 +163,7 @@ func (c *Coordinator) Done() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	 
-	ret := c.nReduceCompleteCnt == c.nReduce - 1
+	ret := c.nReduceCompleteCnt == c.nReduce
 	// Your code here.
 	return ret
 }
@@ -183,11 +193,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		c.mapTasks[i] = files[i]
 		c.mMapAvailCnt++
 	}
-	c.mMap = len(files) - 1
+	
+	c.mMap = len(files)
 	c.mMapCompleteCnt = 0
 
 
-	c.nReduceAvailCnt = nReduce
+	c.nReduceAvailCnt = nReduce - 1
 	c.nReduce = nReduce
 	c.nReduceCompleteCnt = 0
 	

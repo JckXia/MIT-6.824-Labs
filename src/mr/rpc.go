@@ -13,6 +13,7 @@ const (
 	REDUCE_TASK = "ReduceTask"
 	MAP_TASK = "MapTask"
 	NO_TASK_AVAIL = "NoTaskAvail"
+	PLEASE_EXIT = "ExitTask"
 )
 
 

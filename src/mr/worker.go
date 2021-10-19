@@ -7,6 +7,7 @@ import "hash/fnv"
 import "io/ioutil"
 import "os"
 import "strconv"
+import "time"
 
 //
 // Map functions return a slice of KeyValue.
@@ -80,19 +81,38 @@ func ProcessMapTask(fileName string, taskNum int, nReduce int , mapf func(string
 	 AckCompletion()
 }
 
-
+// Find all files matching the
+//		imr-*-Y.out pattern
+//		Read contentS, Load into map<key, list(values)>
+// 		iterate over map, load results into a 
+//		mr-out-Y file, where y is the reduce task
 func ProcessReduceTask(taskNum int, reducef func(string, []string) string) {
-	// ONLY start processing after completion
+	 fmt.Println("Running reduce task ", taskNum)
+
+	 AckCompletion()
 }
 
+// We can implement AskForWork to
+// return a PLEASE_EXIT pseudo  task to exit out of this loop
+// Since each worker has its own process, this should be ok.
+
+// In other words, each worker will have a busy loop,
+// constantly asking cooridnator for work
+
 func ProcessTask(mapf func(string,string)[]KeyValue, reducef func(string,[] string) string) {
-	workReply := AskForWork()
-	if workReply.TaskType == NO_TASK_AVAIL {
-		return 
-	} else if workReply.TaskType == MAP_TASK {
-		ProcessMapTask(workReply.FileName, workReply.TaskNum,  workReply.Nreduce,mapf)
-	} else if workReply.TaskType == REDUCE_TASK {
-		ProcessReduceTask(workReply.TaskNum, reducef)
+	
+	for {
+		workReply := AskForWork()
+		if workReply.TaskType == NO_TASK_AVAIL {
+			time.Sleep(2 * time.Second);	// Sleep for two seconds
+		} else if workReply.TaskType == MAP_TASK {
+			ProcessMapTask(workReply.FileName, workReply.TaskNum,  workReply.Nreduce,mapf)
+		} else if workReply.TaskType == REDUCE_TASK {
+			ProcessReduceTask(workReply.TaskNum, reducef)
+		} else if workReply.TaskType == PLEASE_EXIT {
+			fmt.Println("Worker being told to exit")
+			break
+		}
 	}
 }
 
@@ -127,7 +147,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	ProcessTask(mapf, reducef)
- 
+	
 }
 
 func AskForWork() WorkReply {
