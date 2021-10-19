@@ -10,7 +10,7 @@ import "strconv"
 import "time"
 import "strings"
 import "bufio"
-
+ 
 //
 // Map functions return a slice of KeyValue.
 //
@@ -19,6 +19,10 @@ type KeyValue struct {
 	Value string
 }
 
+type Workor struct {
+	id int
+	sockName string
+}
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -30,14 +34,86 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+func AckCompletion() {
+	completionRequest := CompletionRequest{}
+	completionRequest.WorkerSock = workerSock(0)
+	reply := CompletionReply{}
 
-//
-// main/mrworker.go calls this function.
-// Eventually we would need to spin up a server
-//
+	call("Coordinator.TaskCompletion", &completionRequest, &reply)
+	
+} 
 
-// TODO all of these error messages MUST be handled by the coordinator in the futre
-func ProcessMapTask(fileName string, taskNum int, nReduce int , mapf func(string,string) []KeyValue) {
+
+func AskForWork() WorkReply {
+	args := WorkRequest{workerSock(0)}
+	
+	reply := WorkReply{}
+
+	call("Coordinator.WorkRequest", &args, &reply)
+
+	return reply
+}
+// We can implement AskForWork to
+// return a PLEASE_EXIT pseudo  task to exit out of this loop
+// Since each worker has its own process, this should be ok.
+
+// In other words, each worker will have a busy loop,
+// constantly asking cooridnator for work
+
+// func ProcessTask(mapf func(string,string)[]KeyValue, reducef func(string,[] string) string) {
+	
+// 	for {
+// 		workReply := AskForWork()
+// 		if workReply.TaskType == NO_TASK_AVAIL {
+// 			time.Sleep(2 * time.Second);	// Sleep for two seconds. More sophiscated solution would be to handle it from coord side
+// 		} else if workReply.TaskType == MAP_TASK {
+// 			ProcessMapTask(workReply.FileName, workReply.TaskNum,  workReply.Nreduce,mapf)
+// 		} else if workReply.TaskType == REDUCE_TASK {
+// 			ProcessReduceTask(workReply.TaskNum, reducef)
+// 		} else if workReply.TaskType == PLEASE_EXIT {
+// 			fmt.Println("Worker being told to exit")
+// 			break
+// 		}
+// 	}
+// }
+
+func (w * Workor) ProcessTask(mapf func(string,string)[]KeyValue, reducef func(string,[] string) string) {
+	for {
+		workReply := w.AskForWork()
+		if workReply.TaskType == NO_TASK_AVAIL {
+			time.Sleep(2 * time.Second);	// Sleep for two seconds. More sophiscated solution would be to handle it from coord side
+		} else if workReply.TaskType == MAP_TASK {
+			w.ProcMapTask(workReply.FileName, workReply.TaskNum,  workReply.Nreduce,mapf)
+		} else if workReply.TaskType == REDUCE_TASK {
+			w.ProcReduceTask(workReply.TaskNum, reducef)
+		} else if workReply.TaskType == PLEASE_EXIT {
+			fmt.Println("Worker being told to exit")
+			break
+		}
+	}
+}
+
+func (w * Workor) AskForWork() WorkReply {
+	args := WorkRequest{w.sockName}
+	
+	reply := WorkReply{}
+
+	call("Coordinator.WorkRequest", &args, &reply)
+
+	return reply
+}
+
+func (w * Workor) AccCompletion() {
+	completionRequest := CompletionRequest{}
+	completionRequest.WorkerSock = w.sockName
+	reply := CompletionReply{}
+
+	call("Coordinator.TaskCompletion", &completionRequest, &reply)
+}
+
+
+
+func (w * Workor) ProcMapTask(fileName string, taskNum int, nReduce int , mapf func(string,string) []KeyValue) {
 	fmt.Println("Reading ", fileName)
 	file, err := os.Open(fileName)
 
@@ -78,6 +154,7 @@ func ProcessMapTask(fileName string, taskNum int, nReduce int , mapf func(string
 
 			f.WriteString(buffer[interFileName])
 			buffer[interFileName] = "" // Reset buffer
+			f.Close()
 		} 
 	 }
 
@@ -89,16 +166,12 @@ func ProcessMapTask(fileName string, taskNum int, nReduce int , mapf func(string
 			log.Fatal(err)
 		}
 		f.WriteString(fileContent)
+		f.Close()
 	 }
-	 AckCompletion()
+	 w.AccCompletion()
 }
 
-// Find all files matching the
-//		imr-*-Y.out pattern (Solved, placing reducer under directory)
-//		Read contents, Load into map<key, list(values)>
-// 		iterate over map, load results into a 
-//		mr-out-Y file, where y is the reduce task
-
+// Relative un touched
 // Trade offs:
 //   At most R files
 //  1. Collect the contents as we iterate over the files
@@ -108,126 +181,228 @@ func collecKvPairs(fileName string, kvPairs map [string] [] string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer file.Close()
-
+	 
 	scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {
 		 
 		words := strings.Fields(scanner.Text())
-		 
 		kvPairs[words[0]] = append(kvPairs[words[0]], words[1])
 	}
+
 	if err := scanner.Err(); err != nil {
 		log.Fatal(err)
 	}
+	file.Close()
 }
 
-func ProcessReduceTask(taskNum int, reducef func(string, []string) string) {
+func (w * Workor) InitSessionWithCoord() {
+		// declare an argument structure.
+		args := HandShakeRequest{}
 
-	 dirName := "./reduce-tasks-" + strconv.Itoa(taskNum)
-	 files, err := ioutil.ReadDir(dirName)
+		// fill in the argument(s).
+	
+		// declare a reply structure.
+		reply := HandShakeReply{}
 
-	 // The problem is that sometimes we might not write to
-	 // a reduce, because the we do not hash to that value
-	 if _, err := os.Stat(dirName); os.IsNotExist(err) {
-		// path/to/whatever does not exist
-		AckCompletion()
-		return
-	 }
-	 if err != nil {
-		 log.Fatal(err)
-	 }
+		// send the RPC request, wait for the reply.
+		call("Coordinator.HandShakeRequest", &args, &reply)
+		
+		// reply.Y should be 100.
+		w.id = reply.WorkerId
+	 	w.sockName = workerSock(w.id)
+}
+
+func (w * Workor) ProcReduceTask(taskNum int, reducef func(string, []string) string) {
+
+	dirName := "./reduce-tasks-" + strconv.Itoa(taskNum)
+	files, err := ioutil.ReadDir(dirName)
+
+	// The problem is that sometimes we might not write to
+	// a reduce, because the we do not hash to that value
+	if _, err := os.Stat(dirName); os.IsNotExist(err) {
+	   // path/to/whatever does not exist
+	   w.AccCompletion()
+	   return
+	}
+	if err != nil {
+		log.Fatal(err)
+	}
+
+
+	kvPairs := make(map[string][]string)
+
+
+	for _, f := range files {
+	   pathName := dirName + "/" + f.Name()
+	   collecKvPairs(pathName, kvPairs)
+	}
+
+
+	f, err := os.Create("./mr-out-"+ strconv.Itoa(taskNum))
+	// defer f.Close()
+   
+	//fmt.Println("Kv pair ", kvPairs)
+	for key, value := range kvPairs {
+		 
+		res := reducef(key, value)
+
+		fmt.Fprintf(f, "%v %v\n", key, res);	
+   }
+   f.Close()
+	 
+   w.AccCompletion()
+}
+
+// //
+// // main/mrworker.go calls this function.
+// // Eventually we would need to spin up a server
+// //
+
+// // TODO all of these error messages MUST be handled by the coordinator in the futre
+// func ProcessMapTask(fileName string, taskNum int, nReduce int , mapf func(string,string) []KeyValue) {
+// 	fmt.Println("Reading ", fileName)
+// 	file, err := os.Open(fileName)
+
+// 	if err != nil {
+// 		log.Fatalf("Cannot read %v ", fileName)
+// 	}
+
+// 	fileContent, err := ioutil.ReadAll(file)
+
+// 	if err != nil {
+// 		log.Fatalf("Cannot read %v ", fileName)
+// 	}
+
+// 	mapRes := mapf(fileName, string(fileContent))
+// 	file.Close()
+
+// 	buffer := make(map[string] string)
+
+// 	for _, ch := range mapRes {
+// 		reduceTaskNum := ihash(ch.Key) % nReduce
+// 		reduceDir := "./reduce-tasks-" + strconv.Itoa(reduceTaskNum); 
+
+// 		if _, err := os.Stat(reduceDir); os.IsNotExist(err) {
+// 			err := os.Mkdir(reduceDir, os.ModePerm)
+// 			if err != nil {
+// 				fmt.Println("Error creating directory ", reduceDir);
+// 			}
+// 		}
+
+// 		interFileName :=  reduceDir + "/imr-"+ strconv.Itoa(taskNum) + "-"+ strconv.Itoa(reduceTaskNum)
+// 		kvPair := ch.Key + " " + ch.Value + "\n"
+// 		buffer[interFileName] += kvPair
+// 		if len(buffer[interFileName]) > 100 {
+// 			f, err := os.OpenFile(interFileName, os.O_APPEND | os.O_CREATE | os.O_WRONLY, 0644)
+// 			if err != nil {
+// 				log.Fatal(err)
+// 			}
+
+// 			f.WriteString(buffer[interFileName])
+// 			buffer[interFileName] = "" // Reset buffer
+// 		} 
+// 	 }
+
+// 	 // Clear out any remainants
+// 	 // Terrible solution!!
+// 	 for fileName, fileContent := range buffer {
+// 		f, err := os.OpenFile(fileName, os.O_APPEND | os.O_CREATE | os.O_WRONLY, 0644)
+// 		if err != nil {
+// 			log.Fatal(err)
+// 		}
+// 		f.WriteString(fileContent)
+// 	 }
+// 	 AckCompletion()
+// }
+
+// // Find all files matching the
+// //		imr-*-Y.out pattern (Solved, placing reducer under directory)
+// //		Read contents, Load into map<key, list(values)>
+// // 		iterate over map, load results into a 
+// //		mr-out-Y file, where y is the reduce task
+
  
 
-	 kvPairs := make(map[string][]string)
+// func ProcessReduceTask(taskNum int, reducef func(string, []string) string) {
 
-	 for _, f := range files {
-		pathName := dirName + "/" + f.Name()
-		collecKvPairs(pathName, kvPairs)
-	 }
+// 	 dirName := "./reduce-tasks-" + strconv.Itoa(taskNum)
+// 	 files, err := ioutil.ReadDir(dirName)
 
-	 f, err := os.Create("./mr-out-"+ strconv.Itoa(taskNum))
-	 defer f.Close()
+// 	 // The problem is that sometimes we might not write to
+// 	 // a reduce, because the we do not hash to that value
+// 	 if _, err := os.Stat(dirName); os.IsNotExist(err) {
+// 		// path/to/whatever does not exist
+// 		AckCompletion()
+// 		return
+// 	 }
+// 	 if err != nil {
+// 		 log.Fatal(err)
+// 	 }
+ 
+
+// 	 kvPairs := make(map[string][]string)
+ 
+
+// 	 for _, f := range files {
+// 		pathName := dirName + "/" + f.Name()
+// 		collecKvPairs(pathName, kvPairs)
+// 	 }
+ 
+
+// 	 f, err := os.Create("./mr-out-"+ strconv.Itoa(taskNum))
+// 	 defer f.Close()
 	
-	 //fmt.Println("Kv pair ", kvPairs)
-	 for key, value := range kvPairs {
+// 	 //fmt.Println("Kv pair ", kvPairs)
+// 	 for key, value := range kvPairs {
 		  
-		 res := reducef(key, value)
+// 		 res := reducef(key, value)
 
-		 fmt.Fprintf(f, "%v %v\n", key, res);	
-	}
+// 		 fmt.Fprintf(f, "%v %v\n", key, res);	
+// 	}
  	 
-	AckCompletion()
-}
+// 	AckCompletion()
+// }
 
-// We can implement AskForWork to
-// return a PLEASE_EXIT pseudo  task to exit out of this loop
-// Since each worker has its own process, this should be ok.
 
-// In other words, each worker will have a busy loop,
-// constantly asking cooridnator for work
 
-func ProcessTask(mapf func(string,string)[]KeyValue, reducef func(string,[] string) string) {
-	
-	for {
-		workReply := AskForWork()
-		if workReply.TaskType == NO_TASK_AVAIL {
-			time.Sleep(2 * time.Second);	// Sleep for two seconds. More sophiscated solution would be to handle it from coord side
-		} else if workReply.TaskType == MAP_TASK {
-			ProcessMapTask(workReply.FileName, workReply.TaskNum,  workReply.Nreduce,mapf)
-		} else if workReply.TaskType == REDUCE_TASK {
-			ProcessReduceTask(workReply.TaskNum, reducef)
-		} else if workReply.TaskType == PLEASE_EXIT {
-			fmt.Println("Worker being told to exit")
-			break
-		}
-	}
-}
+// func CallExample() {
 
-func AckCompletion() {
-	completionRequest := CompletionRequest{}
-	completionRequest.WorkerSock = workerSock()
-	reply := CompletionReply{}
+// 	// declare an argument structure.
+// 	args := ExampleArgs{}
 
-	call("Coordinator.TaskCompletion", &completionRequest, &reply)
-	
-} 
+// 	// fill in the argument(s).
+// 	args.X = 99
 
-func CallExample() {
+// 	// declare a reply structure.
+// 	reply := ExampleReply{}
 
-	// declare an argument structure.
-	args := ExampleArgs{}
+// 	// send the RPC request, wait for the reply.
+// 	call("Coordinator.Example", &args, &reply)
 
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	call("Coordinator.Example", &args, &reply)
-
-	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
-}
+// 	// reply.Y should be 100.
+// 	fmt.Printf("reply.Y %v\n", reply.Y)
+// }
 
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
-	ProcessTask(mapf, reducef)
+	
+	w := Workor{}
+	w.InitSessionWithCoord()
+	w.ProcessTask(mapf, reducef)
+	// ProcessTask(mapf, reducef)
 	
 }
 
-func AskForWork() WorkReply {
-	args := WorkRequest{workerSock()}
+// func AskForWork() WorkReply {
+// 	args := WorkRequest{workerSock(0)}
+	
+// 	reply := WorkReply{}
 
-	reply := WorkReply{}
+// 	call("Coordinator.WorkRequest", &args, &reply)
 
-	call("Coordinator.WorkRequest", &args, &reply)
-
-	return reply
-}
+// 	return reply
+// }
 
  
 

@@ -44,6 +44,7 @@ type WorkerStatus struct {
 	TaskNum int
 	Status string
 }
+
 type Coordinator struct {
 	
 	mu   sync.Mutex
@@ -61,6 +62,8 @@ type Coordinator struct {
 
 	nReduceCompleteCnt int
 	nReduce int
+
+	workerIds int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -75,6 +78,16 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
+// TODO add a system for recycling worker ids
+func (c *Coordinator ) HandShakeRequest(args* HandShakeRequest, reply * HandShakeReply) error{
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	reply.WorkerId = c.workerIds 
+	c.workerIds++
+
+	return nil;
+}
+
 // TODO add error handling at ack. (Potentially could fail for what ever reason)
 func (c *Coordinator) TaskCompletion(args *CompletionRequest, reply *CompletionReply) error {
 	c.mu.Lock()
@@ -82,6 +95,9 @@ func (c *Coordinator) TaskCompletion(args *CompletionRequest, reply *CompletionR
 	
 	workerSock := args.WorkerSock
 	workerInfo := c.workerStatus[workerSock]
+
+	// The problem is that, becasue we are delegating worker based on their workerSock,
+	// which we had assumed was unique, we have effectively under counted when they return 
 
 	if workerInfo.Status == "Mapping" {
 		c.mMapCompleteCnt++
@@ -98,6 +114,7 @@ func (c *Coordinator) TaskCompletion(args *CompletionRequest, reply *CompletionR
 func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	fmt.Println("tasks ", c.mMapCompleteCnt)
 	if c.mMapAvailCnt >= 0{
 		// We have map tasks availlable
 		reply.TaskNum = c.mMapAvailCnt
@@ -107,7 +124,8 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 
 		c.workerStatus[args.WorkSock] = WorkerStatus{reply.TaskNum,"Mapping"}
 		c.mMapAvailCnt--; 
-	} else if c.nReduceAvailCnt >= 0 && c.mMapCompleteCnt == c.mMap {
+	} else if c.nReduceAvailCnt >= 0 && c.mMapCompleteCnt == c.mMap  {
+		fmt.Println("Assigining reducer work ")
 		// At this point, we have handed out all map tasks. 
 		// But we must also complete all map tasks before we can give out
 		// reducer work
@@ -188,12 +206,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 	c.mapTasks = make(map[int] string)
 	c.mMapAvailCnt = -1;
-	
+	c.workerIds = 0;
 	for i := 0; i < len(files); i++ {
 		c.mapTasks[i] = files[i]
 		c.mMapAvailCnt++
 	}
-	
+
 	c.mMap = len(files)
 	c.mMapCompleteCnt = 0
 

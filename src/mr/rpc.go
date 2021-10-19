@@ -8,6 +8,7 @@ package mr
 
 import "os"
 import "strconv"
+ 
 
 const (
 	REDUCE_TASK = "ReduceTask"
@@ -16,6 +17,14 @@ const (
 	PLEASE_EXIT = "ExitTask"
 )
 
+
+type HandShakeRequest struct {
+	
+}
+
+type HandShakeReply struct {
+	WorkerId int
+}
 
 type WorkRequest struct {
 	WorkSock string
@@ -53,6 +62,8 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
+ 
+
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
@@ -65,8 +76,8 @@ func coordinatorSock() string {
 }
 
 
-func workerSock() string {
+func workerSock(wid int) string {
 	s := "/var/tmp/824-mrw-";
-	s += strconv.Itoa(os.Getuid())
+	s += strconv.Itoa(wid)
 	return s
 }
