@@ -53,6 +53,7 @@ func AskForWork() WorkReply {
 
 	return reply
 }
+
 // We can implement AskForWork to
 // return a PLEASE_EXIT pseudo  task to exit out of this loop
 // Since each worker has its own process, this should be ok.
@@ -71,7 +72,7 @@ func (w * Workor) ProcessTask(mapf func(string,string)[]KeyValue, reducef func(s
 		} else if workReply.TaskType == REDUCE_TASK {
 			w.ProcReduceTask(workReply.TaskNum, reducef)
 		} else if workReply.TaskType == PLEASE_EXIT {
-			fmt.Println("Worker being told to exit")
+			// fmt.Println("Worker being told to exit")
 			break
 		}
 	}
@@ -98,7 +99,7 @@ func (w * Workor) AccCompletion() {
 
 
 func (w * Workor) ProcMapTask(fileName string, taskNum int, nReduce int , mapf func(string,string) []KeyValue) {
-	fmt.Println("Reading ", fileName)
+	// fmt.Println("Reading ", fileName)
 	file, err := os.Open(fileName)
 
 	if err != nil {

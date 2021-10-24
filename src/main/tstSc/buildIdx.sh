@@ -1,0 +1,1 @@
+go build -race -buildmode=plugin ../../mrapps/indexer.go

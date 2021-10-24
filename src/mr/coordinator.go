@@ -114,7 +114,7 @@ func (c *Coordinator) TaskCompletion(args *CompletionRequest, reply *CompletionR
 func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	fmt.Println("tasks ", c.mMapCompleteCnt)
+
 	if c.mMapAvailCnt >= 0{
 		// We have map tasks availlable
 		reply.TaskNum = c.mMapAvailCnt
@@ -125,7 +125,6 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 		c.workerStatus[args.WorkSock] = WorkerStatus{reply.TaskNum,"Mapping"}
 		c.mMapAvailCnt--; 
 	} else if c.nReduceAvailCnt >= 0 && c.mMapCompleteCnt == c.mMap  {
-		fmt.Println("Assigining reducer work ")
 		// At this point, we have handed out all map tasks. 
 		// But we must also complete all map tasks before we can give out
 		// reducer work
@@ -176,6 +175,9 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 
 // Perform completion logic here 
+
+// Potential solution is to clean up the reduce-tasks-* 
+// directory here.
 func (c *Coordinator) Done() bool {
 
 	c.mu.Lock()
