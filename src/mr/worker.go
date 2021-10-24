@@ -26,6 +26,11 @@ type Workor struct {
 	sockName string
 }
 
+type TempFiles struct {
+	content string
+	realFileName string
+}
+
 //
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -117,7 +122,7 @@ func (w * Workor) ProcMapTask(fileName string, taskNum int, nReduce int , mapf f
 	mapRes := mapf(fileName, string(fileContent))
 	file.Close()
 
-	buffer := make(map[string] string)
+	buffer := make(map[string] * TempFiles)
 
 	for _, ch := range mapRes {
 		reduceTaskNum := ihash(ch.Key) % nReduce
@@ -129,32 +134,41 @@ func (w * Workor) ProcMapTask(fileName string, taskNum int, nReduce int , mapf f
 				fmt.Println("Error creating directory ", reduceDir);
 			}
 		}
-
+		
 		interFileName :=  reduceDir + "/imr-"+ strconv.Itoa(taskNum) + "-"+ strconv.Itoa(reduceTaskNum)
 		kvPair := ch.Key + " " + ch.Value + "\n"
-		buffer[interFileName] += kvPair
-		if len(buffer[interFileName]) > 100 {
+		
+		if buffer[interFileName] == nil {
+			buffer[interFileName] = &TempFiles{}
+		}
+
+		buffer[interFileName].content += kvPair
+		buffer[interFileName].realFileName = interFileName
+
+		if len(buffer[interFileName].content) > 100 {
 			f, err := os.OpenFile(interFileName, os.O_APPEND | os.O_CREATE | os.O_WRONLY, 0644)
 			if err != nil {
 				log.Fatal(err)
 			}
 
-			f.WriteString(buffer[interFileName])
-			buffer[interFileName] = "" // Reset buffer
+			f.WriteString(buffer[interFileName].content)
+			buffer[interFileName].content = "" // Reset buffer
 			f.Close()
 		} 
 	 }
-
-	 // Clear out any remainants
-	 // Terrible solution!!
-	 for fileName, fileContent := range buffer {
-		f, err := os.OpenFile(fileName, os.O_APPEND | os.O_CREATE | os.O_WRONLY, 0644)
+	 
+	 // The idea here is that, once we have completed writing the strings to buffer,
+	 // we atomically rename the temp file to avoid reading from partially complete files
+	 for tmpFileName, tmpFileStruct := range buffer {
+		f, err := os.OpenFile(tmpFileName, os.O_APPEND | os.O_CREATE | os.O_WRONLY, 0644)
 		if err != nil {
 			log.Fatal(err)
 		}
-		f.WriteString(fileContent)
+		f.WriteString(tmpFileStruct.content)
 		f.Close()
+		os.Rename(tmpFileName, tmpFileStruct.realFileName)
 	 }
+ 
 	 w.AccCompletion()
 }
 

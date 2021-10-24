@@ -144,10 +144,6 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
  
 		if c.mMapCompleteCnt == c.mMap && c.nReduceCompleteCnt == c.nReduce {
 			reply.TaskType = PLEASE_EXIT
-
-			reqArgs := TaskDoneRequest{}
-			reqReply := TaskDoneReply{}
-			callWorker("Workor.ReqFromServer",&reqArgs,&reqReply, args.WorkSock)
 		} else {
 			reply.TaskType = NO_TASK_AVAIL
 		}
