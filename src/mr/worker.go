@@ -135,15 +135,16 @@ func (w * Workor) ProcMapTask(fileName string, taskNum int, nReduce int , mapf f
 			}
 		}
 		
-		interFileName :=  reduceDir + "/imr-"+ strconv.Itoa(taskNum) + "-"+ strconv.Itoa(reduceTaskNum)
+		interFileName :=  reduceDir + "/tmr-"+ strconv.Itoa(taskNum) + "-"+ strconv.Itoa(reduceTaskNum)
+		realFileName := reduceDir + "/imr-"+ strconv.Itoa(taskNum) + "-"+ strconv.Itoa(reduceTaskNum)
 		kvPair := ch.Key + " " + ch.Value + "\n"
-		
+
 		if buffer[interFileName] == nil {
 			buffer[interFileName] = &TempFiles{}
 		}
 
 		buffer[interFileName].content += kvPair
-		buffer[interFileName].realFileName = interFileName
+		buffer[interFileName].realFileName = realFileName
 
 		if len(buffer[interFileName].content) > 100 {
 			f, err := os.OpenFile(interFileName, os.O_APPEND | os.O_CREATE | os.O_WRONLY, 0644)
@@ -220,7 +221,7 @@ func (w * Workor) ProcReduceTask(taskNum int, reducef func(string, []string) str
 	files, err := ioutil.ReadDir(dirName)
 
 	// The problem is that sometimes we might not write to
-	// a reduce, because the we do not hash to that value
+	// a reduce id, because the we do not hash to that value
 	if _, err := os.Stat(dirName); os.IsNotExist(err) {
 	   // path/to/whatever does not exist
 	   w.AccCompletion()
@@ -239,8 +240,10 @@ func (w * Workor) ProcReduceTask(taskNum int, reducef func(string, []string) str
 	   collecKvPairs(pathName, kvPairs)
 	}
 
+	realFileName := "./mr-out-" + strconv.Itoa(taskNum)
+	tmpFileName := "./tmr-out-" + strconv.Itoa(taskNum)
 
-	f, err := os.Create("./mr-out-"+ strconv.Itoa(taskNum))
+	f, err := os.Create(tmpFileName)
 	// defer f.Close()
    
 	//fmt.Println("Kv pair ", kvPairs)
@@ -250,6 +253,7 @@ func (w * Workor) ProcReduceTask(taskNum int, reducef func(string, []string) str
 
 		fmt.Fprintf(f, "%v %v\n", key, res);	
    }
+   os.Rename(tmpFileName, realFileName)
    f.Close()
 	 
    w.AccCompletion()
