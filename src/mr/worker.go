@@ -3,6 +3,8 @@ package mr
 import "fmt"
 import "log"
 import "net/rpc"
+import "net"
+import "net/http"
 import "hash/fnv"
 import "io/ioutil"
 import "os"
@@ -72,7 +74,7 @@ func (w * Workor) ProcessTask(mapf func(string,string)[]KeyValue, reducef func(s
 		} else if workReply.TaskType == REDUCE_TASK {
 			w.ProcReduceTask(workReply.TaskNum, reducef)
 		} else if workReply.TaskType == PLEASE_EXIT {
-			// fmt.Println("Worker being told to exit")
+			fmt.Println("Worker being told to exit")
 			break
 		}
 	}
@@ -239,15 +241,33 @@ func (w * Workor) ProcReduceTask(taskNum int, reducef func(string, []string) str
    w.AccCompletion()
 }
  
+// Sample responses from  worker
+func (w *Workor) ReqFromServer(args * TaskDoneRequest, reply *TaskDoneReply) error {
+
+	fmt.Println("Map Reduce job complete! ") 
+	return nil
+}
+
+func(w *Workor) server() {
+	rpc.Register(w);
+	rpc.HandleHTTP()
+
+	sockName := w.sockName
+	os.Remove(sockName)
+	l, e := net.Listen("unix", sockName)
+	if e != nil {
+		log.Fatal("Listen error: ", e)
+	}
+	go http.Serve(l, nil)
+}
 
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	
 	w := Workor{}
 	w.InitSessionWithCoord()
+	w.server()
 	w.ProcessTask(mapf, reducef)
-	// ProcessTask(mapf, reducef)
-	
 }
 
  

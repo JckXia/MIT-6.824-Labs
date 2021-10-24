@@ -144,6 +144,10 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
  
 		if c.mMapCompleteCnt == c.mMap && c.nReduceCompleteCnt == c.nReduce {
 			reply.TaskType = PLEASE_EXIT
+
+			reqArgs := TaskDoneRequest{}
+			reqReply := TaskDoneReply{}
+			callWorker("Workor.ReqFromServer",&reqArgs,&reqReply, args.WorkSock)
 		} else {
 			reply.TaskType = NO_TASK_AVAIL
 		}
@@ -154,6 +158,18 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 	return nil
 } 
 
+func callWorker(rpcname string, args interface{}, reply interface {}, sockName string) bool {
+	c, err := rpc.DialHTTP("unix", sockName)
+	if err != nil {
+		log.Fatal("Dialing", err)
+	}
+	defer c.Close()
+	err = c.Call(rpcname, args, reply)
+	if err == nil {
+		return true
+	}
+	return false
+}
 //
 // start a thread that listens for RPCs from worker.go
 //

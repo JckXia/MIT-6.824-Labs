@@ -18,6 +18,14 @@ const (
 )
 
 
+type TaskDoneRequest struct {
+
+}
+
+type TaskDoneReply struct {
+	
+}
+
 type HandShakeRequest struct {
 	
 }
