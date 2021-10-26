@@ -1,6 +1,7 @@
 package mr
 
 import "fmt"
+// import "math/rand"
 import "log"
 import "net/rpc"
 import "net"
@@ -123,7 +124,8 @@ func (w * Workor) ProcMapTask(fileName string, taskNum int, nReduce int , mapf f
 	file.Close()
 
 	buffer := make(map[string] * TempFiles)
-
+	
+	
 	for _, ch := range mapRes {
 		reduceTaskNum := ihash(ch.Key) % nReduce
 		reduceDir := "./reduce-tasks-" + strconv.Itoa(reduceTaskNum); 
@@ -139,7 +141,10 @@ func (w * Workor) ProcMapTask(fileName string, taskNum int, nReduce int , mapf f
 		realFileName := reduceDir + "/imr-"+ strconv.Itoa(taskNum) + "-"+ strconv.Itoa(reduceTaskNum)
 		kvPair := ch.Key + " " + ch.Value + "\n"
 
+		// This way, if we need to recover from a crash, we refrain from reading old files
 		if buffer[interFileName] == nil {
+			os.Remove(interFileName)
+			os.Create(interFileName)
 			buffer[interFileName] = &TempFiles{}
 		}
 
@@ -242,18 +247,19 @@ func (w * Workor) ProcReduceTask(taskNum int, reducef func(string, []string) str
 
 	realFileName := "./mr-out-" + strconv.Itoa(taskNum)
 	tmpFileName := "./tmr-out-" + strconv.Itoa(taskNum)
-
+	os.Remove(tmpFileName)	// Remove the file before we create it, in case it already exists
+ 
 	f, err := os.Create(tmpFileName)
-	// defer f.Close()
-   
-	//fmt.Println("Kv pair ", kvPairs)
+	 
 	for key, value := range kvPairs {
 		 
 		res := reducef(key, value)
 
 		fmt.Fprintf(f, "%v %v\n", key, res);	
    }
-   os.Rename(tmpFileName, realFileName)
+
+   os.Rename(tmpFileName, realFileName)	  
+   os.RemoveAll(dirName)
    f.Close()
 	 
    w.AccCompletion()

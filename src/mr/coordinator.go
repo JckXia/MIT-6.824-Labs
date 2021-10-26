@@ -7,6 +7,7 @@ import "net/rpc"
 import "net/http"
 import "sync"
 import "fmt"
+import "time"
 
 
 /**
@@ -49,7 +50,7 @@ type Coordinator struct {
 	
 	mu   sync.Mutex
 
-	workerStatus map[string] WorkerStatus
+	workerStatus map[string] *WorkerStatus
 
 	mapTasks map[int]string
 	mMapAvailCnt int
@@ -100,8 +101,10 @@ func (c *Coordinator) TaskCompletion(args *CompletionRequest, reply *CompletionR
 	// which we had assumed was unique, we have effectively under counted when they return 
 
 	if workerInfo.Status == "Mapping" {
+		c.workerStatus[workerSock].Status = "Idle"
 		c.mMapCompleteCnt++
 	} else if workerInfo.Status == "Reducing" {
+		c.workerStatus[workerSock].Status = "Idle"
 		c.nReduceCompleteCnt++
 	} else {
 		// DO NOTHING
@@ -109,6 +112,11 @@ func (c *Coordinator) TaskCompletion(args *CompletionRequest, reply *CompletionR
 	reply.Status = 200
 	
 	return nil
+}
+
+func workerTimer(c *Coordinator, workSock string) {
+	time.Sleep(2 * time.Second)
+	fmt.Println("Task Sock ", workSock)
 }
 
 func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
@@ -122,7 +130,9 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 		reply.TaskType = MAP_TASK 
 		reply.Nreduce = c.nReduce
 
-		c.workerStatus[args.WorkSock] = WorkerStatus{reply.TaskNum,"Mapping"}
+		c.workerStatus[args.WorkSock] = &WorkerStatus{reply.TaskNum,"Mapping"}
+		go workerTimer(c, args.WorkSock)
+
 		c.mMapAvailCnt--; 
 	} else if c.nReduceAvailCnt >= 0 && c.mMapCompleteCnt == c.mMap  {
 		// At this point, we have handed out all map tasks. 
@@ -133,9 +143,9 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 		reply.TaskType = REDUCE_TASK
 		reply.Nreduce = c.nReduce
 		
-		c.workerStatus[args.WorkSock] = WorkerStatus{reply.TaskNum,"Reducing"}
+		c.workerStatus[args.WorkSock] = &WorkerStatus{reply.TaskNum,"Reducing"}
 		c.nReduceAvailCnt--;
-
+		go workerTimer(c, args.WorkSock)
 	} else {
 
 		reply.TaskNum = -1
@@ -148,7 +158,7 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 			reply.TaskType = NO_TASK_AVAIL
 		}
 		// Either way, it is idling
-		c.workerStatus[args.WorkSock] = WorkerStatus{reply.TaskNum, "Idle"}
+		c.workerStatus[args.WorkSock] = &WorkerStatus{reply.TaskNum, "Idle"}
 	}
 	
 	return nil
@@ -216,7 +226,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	c.mu.Lock()
-	c.workerStatus = make(map[string] WorkerStatus)
+	c.workerStatus = make(map[string] *WorkerStatus)
 
 	c.mapTasks = make(map[int] string)
 	c.mMapAvailCnt = -1;

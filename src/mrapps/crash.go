@@ -16,6 +16,7 @@ import "os"
 import "sort"
 import "strconv"
 import "time"
+import "fmt"
 
 func maybeCrash() {
 	max := big.NewInt(1000)
@@ -53,3 +54,10 @@ func Reduce(key string, values []string) string {
 	val := strings.Join(vv, " ")
 	return val
 }
+
+// func main()  {
+//  soo os.Exit() will crash
+//  the entire worker
+// 	Map("tst","abcdef")
+// 	fmt.Println("Test ")
+// }
