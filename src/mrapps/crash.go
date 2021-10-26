@@ -16,7 +16,6 @@ import "os"
 import "sort"
 import "strconv"
 import "time"
-import "fmt"
 
 func maybeCrash() {
 	max := big.NewInt(1000)

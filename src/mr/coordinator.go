@@ -46,12 +46,52 @@ type WorkerStatus struct {
 	Status string
 }
 
+// We can have two channels
+// a reduceTask channel
+// a mapTask channel
+
+
+// Next steps:
+// 1. ReWrite WorkRequest logic using
+// 	  the channels, make sure everything works
+//	  (This part of the logic shouldn't concern the workers)
+
+// 2. Add error handling logic in the timers.
+
+// Now, we only start reduceTask after mapTask completes
+// concerns:
+// WorkRequests dequeues from the map queue, one at a time
+//  	1. If it succeeds, then that task is gone forever
+//		2. If by the end of the workerTimer (when it wakes up) and workeker
+//		   is still mapping, write the taskNumber to the map channel
+
+// If all map task completed, we start reading from the reduce task queue.
+// Work request deque from the reduce task queue, one at a time.
+//		1. If it succeeds, task is gone forever
+//		2. If by end of workertimer, and worker is still reducing, write
+//			taskNumber to the reduce channel.
+ 
+
+// ReWrite:
+// mapTasks map a taskNum to  struct 
+//						        Status     "In Progress" || "Completed"
+//								WorkerSock  string
+
+// When coordinator receives Acc report, set Status to Completed. Reset WorkerSock
+
+//
+type TaskStatus struct {
+	Status string
+	WorkerSock string
+	FileName string
+}
 type Coordinator struct {
 	
 	mu   sync.Mutex
 
 	workerStatus map[string] *WorkerStatus
 
+	mapTask map[int] *TaskStatus
 	mapTasks map[int]string
 	mMapAvailCnt int
 
@@ -59,12 +99,16 @@ type Coordinator struct {
 	mMap int
 
 	nReduceTasks map[int] string
+	nReduceTask map[int] *TaskStatus
 	nReduceAvailCnt int
 
 	nReduceCompleteCnt int
 	nReduce int
 
 	workerIds int
+
+	mapChan chan int
+	reduceChan chan int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -102,9 +146,11 @@ func (c *Coordinator) TaskCompletion(args *CompletionRequest, reply *CompletionR
 
 	if workerInfo.Status == "Mapping" {
 		c.workerStatus[workerSock].Status = "Idle"
+		c.mapTask[workerInfo.TaskNum].Status = "Complete"
 		c.mMapCompleteCnt++
 	} else if workerInfo.Status == "Reducing" {
 		c.workerStatus[workerSock].Status = "Idle"
+		c.nReduceTask[workerInfo.TaskNum].Status = "Complete"
 		c.nReduceCompleteCnt++
 	} else {
 		// DO NOTHING
@@ -119,48 +165,56 @@ func workerTimer(c *Coordinator, workSock string) {
 	fmt.Println("Task Sock ", workSock)
 }
 
+// Testing plan
+// First check that we are able to delegate tasks correctly to map workers,
+// then reducers as following
 func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.mMapAvailCnt >= 0{
-		// We have map tasks availlable
-		reply.TaskNum = c.mMapAvailCnt
-		reply.FileName = c.mapTasks[c.mMapAvailCnt]
-		reply.TaskType = MAP_TASK 
-		reply.Nreduce = c.nReduce
-
-		c.workerStatus[args.WorkSock] = &WorkerStatus{reply.TaskNum,"Mapping"}
-		go workerTimer(c, args.WorkSock)
-
-		c.mMapAvailCnt--; 
-	} else if c.nReduceAvailCnt >= 0 && c.mMapCompleteCnt == c.mMap  {
-		// At this point, we have handed out all map tasks. 
-		// But we must also complete all map tasks before we can give out
-		// reducer work
-		reply.TaskNum = c.nReduceAvailCnt
-		reply.FileName = ""
-		reply.TaskType = REDUCE_TASK
-		reply.Nreduce = c.nReduce
-		
-		c.workerStatus[args.WorkSock] = &WorkerStatus{reply.TaskNum,"Reducing"}
-		c.nReduceAvailCnt--;
-		go workerTimer(c, args.WorkSock)
-	} else {
-
-		reply.TaskNum = -1
-		reply.FileName = ""
-		reply.Nreduce = c.nReduce
  
-		if c.mMapCompleteCnt == c.mMap && c.nReduceCompleteCnt == c.nReduce {
-			reply.TaskType = PLEASE_EXIT
+ 	
+	mapTaskNum, channelOpen := <-c.mapChan
+	 
+	// Channel is closed
+	if channelOpen {
+		// we need to mark tests
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		fmt.Println("Check! ", channelOpen)
+
+ 
+		reply.TaskNum = mapTaskNum
+		reply.FileName = c.mapTask[mapTaskNum].FileName
+		reply.TaskType = MAP_TASK
+		reply.Nreduce = c.nReduce
+
+		c.workerStatus[args.WorkSock] = &WorkerStatus{reply.TaskNum, "Mapping"}
+		c.mapTask[mapTaskNum].Status = "Mapping"
+		c.mapTask[mapTaskNum].WorkerSock = args.WorkSock
+		fmt.Println("Task num ", mapTaskNum) 
+ 
+	} else {
+		
+		fmt.Println("Processing reduce work")
+		// TODO: Need to collect reduce tasks to delegate 
+		reduceTaskNum, channelOpen := <- c.reduceChan
+		if channelOpen {
+		  c.mu.Lock()
+		  defer c.mu.Unlock()
+
+		  reply.TaskNum = reduceTaskNum
+		  reply.FileName = ""
+		  reply.TaskType = REDUCE_TASK
+		  reply.Nreduce = c.nReduce
+		  c.workerStatus[args.WorkSock] = &WorkerStatus{reply.TaskNum,"Reducing"}
+		  c.nReduceTask[reduceTaskNum].Status = "Reducing"
+		  c.nReduceTask[reduceTaskNum].WorkerSock = args.WorkSock
+		   
 		} else {
-			reply.TaskType = NO_TASK_AVAIL
+			reply.TaskType = PLEASE_EXIT
 		}
-		// Either way, it is idling
-		c.workerStatus[args.WorkSock] = &WorkerStatus{reply.TaskNum, "Idle"}
+
+		return nil
 	}
-	
+		
 	return nil
 } 
 
@@ -176,6 +230,60 @@ func callWorker(rpcname string, args interface{}, reply interface {}, sockName s
 	}
 	return false
 }
+
+func (c * Coordinator) reduceComplete() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, taskStatus := range c.nReduceTask {
+		if taskStatus.Status != "Complete" {
+			 return false
+		}
+	}
+	return true
+}
+
+func (c * Coordinator) mapComplete() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, taskStatus := range c.mapTask {
+		if taskStatus.Status != "Complete" {
+			 return false
+		}
+	}
+	return true
+}
+
+func (c * Coordinator) getTasks() {
+
+	for mapTaskNum, taskStatus := range c.mapTask {
+		if taskStatus.Status == "Availlable" {
+			
+			c.mapChan <- mapTaskNum
+			 
+		}
+	}
+	
+	// Need to poll until mapTaskComplete is true
+	// Should be..okay? Since we are adding the queue from the timer worker	 
+	for !(c.mapComplete()) {
+		 
+	}
+	close(c.mapChan)
+	
+	for i := 0; i< c.nReduce ; i++ {
+		c.reduceChan <- i
+	}
+
+ 
+	fmt.Println("Map work complete!")
+
+	for !(c.reduceComplete()) {
+
+	}
+
+	close(c.reduceChan)
+	c.nReduceCompleteCnt = c.nReduce 
+}
 //
 // start a thread that listens for RPCs from worker.go
 //
@@ -185,6 +293,7 @@ func (c *Coordinator) server() {
 	//l, e := net.Listen("tcp", ":1234")
 	sockname := coordinatorSock()
 	os.Remove(sockname)
+	go c.getTasks()
 	l, e := net.Listen("unix", sockname)
 	if e != nil {
 		log.Fatal("listen error:", e)
@@ -227,13 +336,29 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 
 	c.mu.Lock()
 	c.workerStatus = make(map[string] *WorkerStatus)
+    
+	c.mapTask = make(map[int]* TaskStatus)
+	c.nReduceTask = make(map[int] *TaskStatus)
 
 	c.mapTasks = make(map[int] string)
+
+	c.mapChan = make(chan int)
+	c.reduceChan = make(chan int)
+
 	c.mMapAvailCnt = -1;
 	c.workerIds = 0;
+
 	for i := 0; i < len(files); i++ {
 		c.mapTasks[i] = files[i]
+		c.mapTask[i] = &TaskStatus {"Availlable", "", files[i]}
 		c.mMapAvailCnt++
+	}
+
+	// TODO: Need to have the map workers report the reduce steps.
+	// For now simply load it into nReduceTask
+	for i :=0;i< nReduce; i++ {
+		//c.nReduceTasks[i] = files[i]
+		 c.nReduceTask[i] = &TaskStatus{"Availlable","", ""}
 	}
 
 	c.mMap = len(files)
