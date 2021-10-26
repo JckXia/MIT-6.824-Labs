@@ -30,49 +30,48 @@ rm -f mr-*
 
 failed_any=0
 
-#########################################################
-# first word-count
+# #########################################################
+# # first word-count
 
-# generate the correct output
-../mrsequential ../../mrapps/wc.so ../pg*txt || exit 1
-sort mr-out-0 > mr-correct-wc.txt
-rm -f mr-out*
+# # generate the correct output
+# ../mrsequential ../../mrapps/wc.so ../pg*txt || exit 1
+# sort mr-out-0 > mr-correct-wc.txt
+# rm -f mr-out*
 
-echo '***' Starting wc test.
+# echo '***' Starting wc test.
 
-timeout -k 2s 180s ../mrcoordinator ../pg*txt &
-pid=$!
+# timeout -k 2s 180s ../mrcoordinator ../pg*txt &
+# pid=$!
 
-# give the coordinator time to create the sockets.
-sleep 1
+# # give the coordinator time to create the sockets.
+# sleep 1
 
-# start multiple workers.
-timeout -k 2s 180s ../mrworker ../../mrapps/wc.so &
-timeout -k 2s 180s ../mrworker ../../mrapps/wc.so &
-timeout -k 2s 180s ../mrworker ../../mrapps/wc.so &
+# # start multiple workers.
+# timeout -k 2s 180s ../mrworker ../../mrapps/wc.so &
+# timeout -k 2s 180s ../mrworker ../../mrapps/wc.so &
+# timeout -k 2s 180s ../mrworker ../../mrapps/wc.so &
 
-# wait for the coordinator to exit.
-wait $pid
+# # wait for the coordinator to exit.
+# wait $pid
 
-# since workers are required to exit when a job is completely finished,
-# and not before, that means the job has finished.
-sort mr-out* | grep . > mr-wc-all
-if cmp mr-wc-all mr-correct-wc.txt
-then
-  echo '---' wc test: PASS
-else
-  echo '---' wc output is not the same as mr-correct-wc.txt
-  echo '---' wc test: FAIL
-  failed_any=1
-fi
+# # since workers are required to exit when a job is completely finished,
+# # and not before, that means the job has finished.
+# sort mr-out* | grep . > mr-wc-all
+# if cmp mr-wc-all mr-correct-wc.txt
+# then
+#   echo '---' wc test: PASS
+# else
+#   echo '---' wc output is not the same as mr-correct-wc.txt
+#   echo '---' wc test: FAIL
+#   failed_any=1
+# fi
 
-# wait for remaining workers and coordinator to exit.
-wait
+# # wait for remaining workers and coordinator to exit.
+# wait
 
 # #########################################################
 # # now indexer
 # rm -f mr-*
-# rm -rf reduce-tasks-*
 
 # # generate the correct output
 # ../mrsequential ../../mrapps/indexer.so ../pg*txt || exit 1
@@ -96,7 +95,6 @@ wait
 #   echo '---' indexer output is not the same as mr-correct-indexer.txt
 #   echo '---' indexer test: FAIL
 #   failed_any=1
-#   exit 1
 # fi
 
 # wait
@@ -105,7 +103,6 @@ wait
 # echo '***' Starting map parallelism test.
 
 # rm -f mr-*
-# rm -rf reduce-tasks-*
 
 # timeout -k 2s 180s ../mrcoordinator ../pg*txt &
 # sleep 1
@@ -137,7 +134,6 @@ wait
 # echo '***' Starting reduce parallelism test.
 
 # rm -f mr-*
-# rm -rf reduce-tasks-*
 
 # timeout -k 2s 180s ../mrcoordinator ../pg*txt &
 # sleep 1
@@ -161,7 +157,6 @@ wait
 # echo '***' Starting job count test.
 
 # rm -f mr-*
-# rm -rf reduce-tasks-*
 
 # timeout -k 2s 180s ../mrcoordinator ../pg*txt &
 # sleep 1
@@ -187,7 +182,6 @@ wait
 # # test whether any worker or coordinator exits before the
 # # task has completed (i.e., all output files have been finalized)
 # rm -f mr-*
-# rm -rf reduce-tasks-*
 
 # echo '***' Starting early exit test.
 
@@ -225,7 +219,6 @@ wait
 #   failed_any=1
 # fi
 # rm -f mr-*
-# rm -rf reduce-tasks-*
 
 #########################################################
 echo '***' Starting crash test.
@@ -234,13 +227,11 @@ echo '***' Starting crash test.
 ../mrsequential ../../mrapps/nocrash.so ../pg*txt || exit 1
 sort mr-out-0 > mr-correct-crash.txt
 rm -f mr-out*
-rm -rf reduce-tasks-*
-
 
 rm -f mr-done
 (timeout -k 2s 180s ../mrcoordinator ../pg*txt ; touch mr-done ) &
 sleep 1
- 
+
 # start multiple workers
 timeout -k 2s 180s ../mrworker ../../mrapps/crash.so &
 
@@ -282,6 +273,6 @@ fi
 if [ $failed_any -eq 0 ]; then
     echo '***' PASSED ALL TESTS
 else
-    echo '***' FAILED SOME TESTS
+    echo '***' FAILED SOME TESTS $failed_any
     exit 1
 fi

@@ -97,6 +97,7 @@ type Coordinator struct {
 
 	mMapCompleteCnt int
 	mMap int
+	mMapComplete bool
 
 	nReduceTasks map[int] string
 	nReduceTask map[int] *TaskStatus
@@ -160,9 +161,49 @@ func (c *Coordinator) TaskCompletion(args *CompletionRequest, reply *CompletionR
 	return nil
 }
 
-func workerTimer(c *Coordinator, workSock string) {
-	time.Sleep(2 * time.Second)
-	fmt.Println("Task Sock ", workSock)
+// TODO refactor this. Right now we just need to get it working
+func workerTimer(c *Coordinator, workSock string, workType string) {
+	time.Sleep(10 * time.Second)
+	// c.mu.Lock()
+	// defer c.mu.Unlock()
+	c.mu.Lock()
+	if c.workerStatus[workSock].Status != "Idle" {
+		if workType == "Map" {
+			
+			
+			c.workerStatus[workSock].Status = "Mapping"
+			taskNum := c.workerStatus[workSock].TaskNum
+			c.mapTask[taskNum].Status = "Mapping"
+
+			if c.mMapComplete {
+				c.mu.Unlock()
+				return
+			}
+		 
+			c.mu.Unlock() 
+
+			
+			
+			c.mapChan <- taskNum
+			
+		} else {
+
+		 
+			c.workerStatus[workSock].Status = "Reducing"
+			taskNum := c.workerStatus[workSock].TaskNum
+			c.nReduceTask[taskNum].Status = "Reducing"
+
+			if c.nReduceCompleteCnt == c.nReduce  {
+				c.mu.Unlock()
+				return
+			}
+			c.mu.Unlock()
+			c.reduceChan <- taskNum
+		}
+	} else {
+		c.mu.Unlock()
+	}
+	 
 }
 
 // Testing plan
@@ -178,22 +219,24 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 		// we need to mark tests
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		fmt.Println("Check! ", channelOpen)
+		 
 
  
 		reply.TaskNum = mapTaskNum
 		reply.FileName = c.mapTask[mapTaskNum].FileName
 		reply.TaskType = MAP_TASK
 		reply.Nreduce = c.nReduce
-
+		
 		c.workerStatus[args.WorkSock] = &WorkerStatus{reply.TaskNum, "Mapping"}
 		c.mapTask[mapTaskNum].Status = "Mapping"
 		c.mapTask[mapTaskNum].WorkerSock = args.WorkSock
-		fmt.Println("Task num ", mapTaskNum) 
+		go workerTimer(c, args.WorkSock,"Map")
+
+	
  
 	} else {
 		
-		fmt.Println("Processing reduce work")
+		// fmt.Println("Processing reduce work")
 		// TODO: Need to collect reduce tasks to delegate 
 		reduceTaskNum, channelOpen := <- c.reduceChan
 		if channelOpen {
@@ -207,7 +250,8 @@ func (c *Coordinator) WorkRequest(args *WorkRequest, reply * WorkReply) error {
 		  c.workerStatus[args.WorkSock] = &WorkerStatus{reply.TaskNum,"Reducing"}
 		  c.nReduceTask[reduceTaskNum].Status = "Reducing"
 		  c.nReduceTask[reduceTaskNum].WorkerSock = args.WorkSock
-		   
+		  go workerTimer(c, args.WorkSock, "Reduce")
+
 		} else {
 			reply.TaskType = PLEASE_EXIT
 		}
@@ -268,8 +312,15 @@ func (c * Coordinator) getTasks() {
 	for !(c.mapComplete()) {
 		 
 	}
+	c.mu.Lock()
+	c.mMapComplete = true
 	close(c.mapChan)
+	c.mu.Unlock()
+
+	 
+
 	
+
 	for i := 0; i< c.nReduce ; i++ {
 		c.reduceChan <- i
 	}
@@ -282,7 +333,9 @@ func (c * Coordinator) getTasks() {
 	}
 
 	close(c.reduceChan)
+	c.mu.Lock()
 	c.nReduceCompleteCnt = c.nReduce 
+	c.mu.Unlock()
 }
 //
 // start a thread that listens for RPCs from worker.go
@@ -335,6 +388,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	c.mu.Lock()
+	c.mMapComplete = false
 	c.workerStatus = make(map[string] *WorkerStatus)
     
 	c.mapTask = make(map[int]* TaskStatus)
