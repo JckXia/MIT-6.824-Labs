@@ -26,6 +26,12 @@ import (
 	"6.824/labrpc"
 )
 
+// Server states
+const (
+	Follower = iota
+	Candidate
+	Leader
+)
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -60,6 +66,8 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
+	currentTerm int32
+	votedFor int
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -136,6 +144,16 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
+type AppendEntriesArgs struct {
+	Term int32
+	leaderId int32
+}
+
+type AppendEntriesReply struct {
+	Term int32
+	Success bool
+}
+
 
 //
 // example RequestVote RPC arguments structure.
@@ -143,6 +161,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term int32
+	CandidateId int32
 }
 
 //
@@ -150,7 +170,8 @@ type RequestVoteArgs struct {
 // field names must start with capital letters!
 //
 type RequestVoteReply struct {
-	// Your data here (2A).
+	Term int32
+	VoteGranted bool
 }
 
 //
