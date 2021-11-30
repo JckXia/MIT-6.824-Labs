@@ -22,7 +22,8 @@ import (
 	"sync"
 	"time"
 	"sync/atomic"
-
+	"fmt"
+	"math/rand"
 //	"6.824/labgob"
 	"6.824/labrpc"
 )
@@ -71,7 +72,8 @@ type Raft struct {
 	dead      int32               // set by Kill()
 	electionState int			// Follower, Candidate, Or Leader	
 	currentTerm int32
-	votedFor int
+	votedFor int32
+	votesCnt int
 	lastContactFromLeader int64 
 	electionTimeout int
 	// Your data here (2A, 2B, 2C).
@@ -189,7 +191,7 @@ func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRepl
 		reply.Success = false
 	} else {
 		rf.lastContactFromLeader = getCurrentTimeStamp()
-		rf.currentTerm = args.Term	// Speeds up (?)  rf's current term to argument's 
+		rf.currentTerm = args.Term	// This way we are ensuring the current term will always be up to date 
 		rf.electionState = Follower
 		reply.Success = true
 	}
@@ -206,9 +208,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else {
 		 rf.currentTerm = args.Term
 		 rf.electionState = Follower
-		if rf.votedFor == nil || rf.votedFor == args.candidateId {
+		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 			rf.lastContactFromLeader = getCurrentTimeStamp()
-			rf.votedFor = args.candidateId
+			rf.votedFor = args.CandidateId
 			reply.VoteGranted = true
 		}
 	}
@@ -331,16 +333,17 @@ func (rf *Raft) ticker() {
 		
 		rf.mu.Lock()
 		currentTimeStamp := getCurrentTimeStamp()
-		elapsedTime := rf.lastContactFromLeader - currentTimeStamp
-		rf.currentTerm += 1
-		
-		if elapsedTime >= electionTimeout {
+		elapsedTime := int(rf.lastContactFromLeader - currentTimeStamp)
+	
+		// Follower converts to candidate
+		if elapsedTime >= rf.electionTimeout {
+			rf.currentTerm += 1
 			rf.electionState = Candidate
 			rf.mu.Unlock()
 			
 		} else {
 			rf.mu.Unlock()
-			time.Sleep(getElectionTimeout() * time.Millisecond)	
+			time.Sleep(time.Duration(rf.getElectionTimeout()) * time.Millisecond)	
 		}
 		 
 	}
@@ -358,7 +361,7 @@ func (rf *Raft) leaderAppendEntrPoll() {
 	}
 }
 
-func (rf *Raft) getElectionTimeout() int64 {
+func (rf *Raft) getElectionTimeout() int {
 	min := 150
 	max := 310
 	rand.Seed(makeSeed())
@@ -383,9 +386,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.electionState = Follower
 	rf.lastContactFromLeader = getCurrentTimeStamp() // Blank slate
-	rf.electionTimeout = getElectionTimeout() // Get election timeout
+	rf.electionTimeout = rf.getElectionTimeout() // Get election timeout
 	rf.me = me
-	rf.votedFor = nil
+	rf.votesCnt = 0
+	rf.votedFor = -1
 
 	// Your initialization code here (2A, 2B, 2C).
 
