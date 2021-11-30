@@ -20,6 +20,7 @@ package raft
 import (
 //	"bytes"
 	"sync"
+	"time"
 	"sync/atomic"
 
 //	"6.824/labgob"
@@ -56,6 +57,9 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
+func getCurrentTimeStamp() int64 {
+	return time.Now().UnixNano() / int64(time.Millisecond)
+}
 //
 // A Go object implementing a single Raft peer.
 //
@@ -65,9 +69,11 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
-
+	electionState int			// Follower, Candidate, Or Leader	
 	currentTerm int32
 	votedFor int
+	lastContactFromLeader int64 
+	electionTimeout int
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -174,11 +180,40 @@ type RequestVoteReply struct {
 	VoteGranted bool
 }
 
-//
-// example RequestVote RPC handler.
-//
+// AppendEntries handler
+// atm just for handling heart beat
+func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	reply.Term = rf.currentTerm
+	if rf.currentTerm > args.Term {
+		reply.Success = false
+	} else {
+		rf.lastContactFromLeader = getCurrentTimeStamp()
+		rf.currentTerm = args.Term	// Speeds up (?)  rf's current term to argument's 
+		rf.electionState = Follower
+		reply.Success = true
+	}
+	rf.mu.Unlock()
+}
+
+ 
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	reply.Term = rf.currentTerm
+	if rf.currentTerm > args.Term {
+		reply.VoteGranted = false
+	} else {
+		 rf.currentTerm = args.Term
+		 rf.electionState = Follower
+		if rf.votedFor == nil || rf.votedFor == args.candidateId {
+			rf.lastContactFromLeader = getCurrentTimeStamp()
+			rf.votedFor = args.candidateId
+			reply.VoteGranted = true
+		}
+	}
+
+	rf.mu.Unlock()
 }
 
 //
@@ -212,6 +247,33 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	if ok {
+		rf.mu.Lock()
+		if reply.Term > rf.currentTerm {
+			// Reset state. Current state is stale
+			rf.currentTerm = reply.Term
+			rf.electionState = Follower
+		} else {
+
+		}
+		rf.mu.Unlock()
+	}
+	return ok
+}
+
+func (rf *Raft) sendAppendEntry(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	if ok {
+		rf.mu.Lock()
+		if reply.Term > rf.currentTerm {
+			// Reset state. Current state is stale
+			rf.currentTerm = reply.Term
+			rf.electionState = Follower
+		} else {
+
+		}
+		rf.mu.Unlock()
+	}
 	return ok
 }
 
@@ -266,12 +328,41 @@ func (rf *Raft) killed() bool {
 // heartsbeats recently.
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
-
-		// Your code here to check if a leader election should
-		// be started and to randomize sleeping time using
-		// time.Sleep().
-
+		
+		rf.mu.Lock()
+		currentTimeStamp := getCurrentTimeStamp()
+		elapsedTime := rf.lastContactFromLeader - currentTimeStamp
+		rf.currentTerm += 1
+		
+		if elapsedTime >= electionTimeout {
+			rf.electionState = Candidate
+			rf.mu.Unlock()
+			
+		} else {
+			rf.mu.Unlock()
+			time.Sleep(getElectionTimeout() * time.Millisecond)	
+		}
+		 
 	}
+}
+
+// For sending RPC requests as "leader"
+func (rf *Raft) leaderAppendEntrPoll() {
+	for {
+		_, isleader := rf.GetState()
+		if isleader {
+			fmt.Println("Send RPC CALLS!")
+		} else {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+func (rf *Raft) getElectionTimeout() int64 {
+	min := 150
+	max := 310
+	rand.Seed(makeSeed())
+	return rand.Intn(max - min + 1) + min 
 }
 
 //
@@ -290,7 +381,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
+	rf.electionState = Follower
+	rf.lastContactFromLeader = getCurrentTimeStamp() // Blank slate
+	rf.electionTimeout = getElectionTimeout() // Get election timeout
 	rf.me = me
+	rf.votedFor = nil
 
 	// Your initialization code here (2A, 2B, 2C).
 
