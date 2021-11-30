@@ -88,9 +88,13 @@ func (rf *Raft) GetState() (int, bool) {
 
 	var term int
 	var isleader bool
-	// Your code here (2A).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	term = int(rf.currentTerm)
+	isleader = rf.electionState == Leader
 	return term, isleader
 }
+
 
 //
 // save Raft's persistent state to stable storage,
@@ -249,33 +253,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	if ok {
-		rf.mu.Lock()
-		if reply.Term > rf.currentTerm {
-			// Reset state. Current state is stale
-			rf.currentTerm = reply.Term
-			rf.electionState = Follower
-		} else {
-
-		}
-		rf.mu.Unlock()
-	}
 	return ok
 }
 
 func (rf *Raft) sendAppendEntry(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	if ok {
-		rf.mu.Lock()
-		if reply.Term > rf.currentTerm {
-			// Reset state. Current state is stale
-			rf.currentTerm = reply.Term
-			rf.electionState = Follower
-		} else {
 
-		}
-		rf.mu.Unlock()
-	}
 	return ok
 }
 
@@ -327,7 +310,10 @@ func (rf *Raft) killed() bool {
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
-// heartsbeats recently.
+// Logic surrounding election start
+
+// lastContactFromLeader --- currentTimeStamp  -- lastContactFromLeader + electionTimeout
+//   
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		
@@ -337,21 +323,76 @@ func (rf *Raft) ticker() {
 	
 		// Follower converts to candidate
 		if elapsedTime >= rf.electionTimeout {
+
 			rf.currentTerm += 1
+			rf.votesCnt += 1
+			rf.lastContactFromLeader = getCurrentTimeStamp()
+			rf.electionTimeout = rf.getElectionTimeout()
 			rf.electionState = Candidate
 			rf.mu.Unlock()
 			
 		} else {
+			// ElectionTimeout isn't comlete yet
 			rf.mu.Unlock()
-			time.Sleep(time.Duration(rf.getElectionTimeout()) * time.Millisecond)	
+			time.Sleep(time.Duration(rf.electionTimeout - elapsedTime) * time.Millisecond)	
 		}
 		 
 	}
 }
 
 // For sending RPC requests as "leader"
-func (rf *Raft) leaderAppendEntrPoll() {
+func (rf *Raft) RPCReqPoll() {
 	for {
+		rf.mu.Lock()
+		electionState := rf.electionState
+		currTerm := rf.currentTerm
+		candidateId := int32(rf.me)
+		serverCnt := len(rf.peers)
+		electionCompl := false
+
+		if electionState == Candidate {
+			
+			if serverCnt == 0 {
+				rf.mu.Unlock()
+			}
+
+			for serverId := 0; serverId < serverCnt; serverId ++ {
+				reqVoteArgs := RequestVoteArgs{currTerm, candidateId}
+				reqVoteReply := RequestVoteReply{}
+
+				if electionCompl {
+					rf.mu.Unlock()
+					break
+				}
+				
+				go func() {
+					// This potentially could dead lock
+					rf.mu.Unlock()
+					status := rf.sendRequestVote(serverId, &reqVoteArgs, &reqVoteReply)
+
+					rf.mu.Lock()
+					if status && reqVoteReply.VoteGranted {
+						rf.votesCnt++
+						
+						if rf.votesCnt > serverCnt / 2 {
+							// I am leader
+							electionState = Leader
+							electionCompl = true
+						}
+					}
+					rf.mu.Unlock()
+				}()
+			}	
+		} 
+		
+		rf.mu.Lock()
+
+		if electionState == Leader {
+
+		}
+
+		rf.mu.Unlock()
+		
 		_, isleader := rf.GetState()
 		if isleader {
 			fmt.Println("Send RPC CALLS!")
@@ -398,6 +439,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
+	// go rf.RPCReqPoll()
 
 
 	return rf
