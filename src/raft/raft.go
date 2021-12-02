@@ -358,7 +358,8 @@ func (rf *Raft) ticker() {
 		elapsedTime := int(currentTimeStamp - rf.lastContactFromLeader)
 		
 		// Follower converts to candidate
-		if elapsedTime >= rf.electionTimeout {
+		// Do not increment counter if already leader
+		if elapsedTime >= rf.electionTimeout && rf.electionState != Leader {
 
 			rf.currentTerm += 1
 			rf.votesCnt = 1
@@ -412,7 +413,6 @@ func (rf *Raft) RPCReqPoll() {
 					go func(serverId int) {
 						// This potentially could dead lock
 						 
-						//fmt.Println("CAND " , reqVoteArgs, " ", reqVoteReply)
 						status := rf.sendRequestVote(serverId, &reqVoteArgs, &reqVoteReply)
 						rf.mu.Lock()
 						if status && reqVoteReply.VoteGranted {
