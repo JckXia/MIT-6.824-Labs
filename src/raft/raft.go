@@ -356,7 +356,7 @@ func (rf *Raft) ticker() {
 		 
 		currentTimeStamp := getCurrentTimeStamp()
 		elapsedTime := int(currentTimeStamp - rf.lastContactFromLeader)
- 
+		
 		// Follower converts to candidate
 		if elapsedTime >= rf.electionTimeout {
 
@@ -369,8 +369,9 @@ func (rf *Raft) ticker() {
 			
 		} else {
 			// ElectionTimeout isn't comlete yet
+			elecTimOut := rf.electionTimeout
 			rf.mu.Unlock()
-			time.Sleep(time.Duration(rf.electionTimeout - elapsedTime) * time.Millisecond)	
+			time.Sleep(time.Duration(elecTimOut - elapsedTime) * time.Millisecond)	
 		}
 		 
 	}
@@ -399,9 +400,13 @@ func (rf *Raft) RPCReqPoll() {
 				reqVoteArgs := RequestVoteArgs{currTerm, candidateId}
 				reqVoteReply := RequestVoteReply{}
 				
+				rf.mu.Lock()
 				if elecCompl {
+					rf.mu.Unlock()
 					break
-				}	
+				}
+				rf.mu.Unlock()
+
 				if int(candidateId) != serverId {
 					go func(serverId int) {
 						// This potentially could dead lock
@@ -432,11 +437,12 @@ func (rf *Raft) RPCReqPoll() {
 			 
 		} else if electionState == Leader {
 			 
-			appendEntrArgs := AppendEntriesArgs{currTerm, candidateId}
-			appendEntrReply := AppendEntriesReply{}
+			 
 		 
 			rf.mu.Unlock()
 			for serverId := 0; serverId < serverCnt; serverId++ { 
+				appendEntrArgs := AppendEntriesArgs{currTerm, candidateId}
+				appendEntrReply := AppendEntriesReply{}
 				// rf.mu.Unlock()
 				if int(candidateId) != serverId { 
 					go func(serverId int) {
