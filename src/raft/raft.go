@@ -199,10 +199,12 @@ func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRepl
 		reply.Success = false
 	} else {
 		 
-		if rf.electionState == Candidate {
-			rf.votesCnt = 0
-		}
+		// if rf.electionState == Candidate {
+		// 	rf.votesCnt = 0
+		// }
+		rf.votesCnt = 0
 		rf.lastContactFromLeader = getCurrentTimeStamp()
+		rf.electionTimeout = rf.getElectionTimeout()
 		rf.currentTerm = args.Term	// This way we are ensuring the current term will always be up to date 
 		rf.electionState = Follower
 		reply.Success = true
@@ -224,6 +226,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		 rf.electionState = Follower
 		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 			rf.lastContactFromLeader = getCurrentTimeStamp()
+			rf.electionTimeout = rf.getElectionTimeout()
 			rf.votedFor = args.CandidateId
 			reply.VoteGranted = true
 		}
@@ -321,6 +324,25 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func (rf * Raft) startElection() {
+	rf.electionState = Candidate
+	rf.currentTerm +=1
+	rf.votedFor = int32(rf.me)
+	rf.votesCnt = 1
+}
+
+func (rf * Raft) revertToFollower(newTerm int) {
+	rf.electionState = Follower
+	rf.currentTerm = int32(newTerm)
+	rf.votedFor = -1
+	rf.lastContactFromLeader = getCurrentTimeStamp()
+	rf.electionTimeout = rf.getElectionTimeout()
+}
+
+func (rf  * Raft) convToCandidate() {
+
+}	
+
 // The ticker go routine starts a new election if this peer hasn't received
 // Logic surrounding election start
 
@@ -397,6 +419,10 @@ func (rf *Raft) RPCReqPoll() {
 						} else if reqVoteReply.Term > currTerm {
 							rf.currentTerm = reqVoteReply.Term
 							rf.electionState = Follower
+							rf.votedFor = -1
+							rf.votesCnt = 0
+							rf.lastContactFromLeader = getCurrentTimeStamp()
+							rf.electionTimeout = rf.getElectionTimeout()
 						}
 						rf.mu.Unlock()
 					}(serverId)
@@ -424,6 +450,11 @@ func (rf *Raft) RPCReqPoll() {
 							 
 							rf.currentTerm = appendEntrReply.Term
 							rf.electionState = Follower
+							rf.votedFor = -1
+							rf.votesCnt = 0
+							rf.lastContactFromLeader = getCurrentTimeStamp()
+							rf.electionTimeout = rf.getElectionTimeout()
+
 						}
 						rf.mu.Unlock()
 					}(serverId)
