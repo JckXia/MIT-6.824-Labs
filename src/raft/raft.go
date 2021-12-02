@@ -362,6 +362,7 @@ func (rf *Raft) ticker() {
 
 			rf.currentTerm += 1
 			rf.votesCnt = 1
+			rf.votedFor = int32(rf.me) 
 			rf.lastContactFromLeader = getCurrentTimeStamp()
 			rf.electionTimeout = rf.getElectionTimeout()
 			rf.electionState = Candidate
