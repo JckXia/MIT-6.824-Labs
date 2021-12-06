@@ -58,6 +58,11 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
+type Log struct {
+	command interface {}
+	termNumber int
+}
+
 func getCurrentTimeStamp() int64 {
 	return time.Now().UnixNano() / int64(time.Millisecond)
 }
@@ -76,6 +81,13 @@ type Raft struct {
 	votesCnt int
 	lastContactFromLeader int64 
 	electionTimeout int
+
+	logs map[int]Log
+
+	commitIndex int
+	lastApplied int
+	nextIndex map[int] int
+	matchIndex map[int]int 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -479,8 +491,7 @@ func (rf *Raft) RPCReqPoll() {
  
 }
 
-// min := 550
-// max := 600
+
 func (rf *Raft) getElectionTimeout() int {
 	min := 400
 	max := 500
