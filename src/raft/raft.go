@@ -19,7 +19,7 @@ package raft
 
 import (
 //	"bytes"
-//	"fmt"
+     "fmt"
 	"sync"
 	"math"
 	"time"
@@ -234,10 +234,12 @@ func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRepl
 		
 		if len(rf.logs) >= args.PrevLogIndex {
 			if len(rf.logs) == 0 ||  args.PrevLogIndex < 0 ||  rf.logs[args.PrevLogIndex].TermNumber == args.PrevLogTerm {
+				 			
 				for _, entry := range args.Entries {
 					rf.logs = append(rf.logs, entry)
 				}
-
+ 
+			//	fmt.Println("appending logs ", rf.logs, " SERVER ", rf.me)	
 				if args.LeaderCommit > rf.commitIndex {
 					leaderCommit := float64(args.LeaderCommit)
 					lastEntryIdx := float64(len(rf.logs) - 1)
@@ -245,7 +247,7 @@ func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRepl
 				}
 
 				reply.Success = true
-			} else {
+			} else if rf.logs[args.PrevLogIndex].TermNumber != args.PrevLogTerm{
 				
 				rf.logs = rf.logs[args.PrevLogIndex : len(rf.logs)]
 		
@@ -382,7 +384,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.logs = append(rf.logs, newLog)
 	
 	index := len(rf.logs) - 1
-
+	fmt.Println("Leader ", rf.me," append log res ", rf.logs," index ", index)
 	return index, term, isLeader
 }
 
@@ -488,10 +490,18 @@ func (rf *Raft) RPCReqPoll() {
 		rf.mu.Lock()
 
 		if rf.commitIndex > rf.lastApplied {
-			rf.lastApplied += 1
+			 
+			// rf.lastApplied = 1 + rf.lastApplied
+			// fmt.Println("Server ", rf.me," applies message ", rf.logs[rf.lastApplied].Command)
+			rf.lastApplied++
+			lastAppliedVal := rf.lastApplied 
+			commandToApply := rf.logs[lastAppliedVal].Command
+
 			go func() {
-				applyMsg := ApplyMsg{true, rf.logs[rf.lastApplied].Command, rf.lastApplied, false, nil,0,0}
+			 
+				applyMsg := ApplyMsg{true, commandToApply, lastAppliedVal, false, nil,0,0}
 				rf.applyMsgChan <- applyMsg
+				 
 			}()
 		}
 
@@ -501,10 +511,7 @@ func (rf *Raft) RPCReqPoll() {
 		serverCnt := len(rf.peers)
 		elecCompl := false
 
-		if rf.commitIndex > rf.lastApplied {
-			rf.lastApplied += 1
-			// Construct a message to send to applMsgChan
-		}
+ 
 
 		if electionState == Candidate {
 			
@@ -587,11 +594,12 @@ func (rf *Raft) RPCReqPoll() {
 				
 				if int(candidateId) != serverId { 
 					go func(serverId int) {
-				 
+						
 						rf.sendAppendEntry(serverId, &appendEntrArgs, &appendEntrReply)
 	 
 						rf.mu.Lock()
-						
+					 
+
 						if !appendEntrReply.Success && appendEntrReply.Term > currTerm && rf.electionState == Leader {
 							 
 							rf.currentTerm = appendEntrReply.Term
@@ -627,13 +635,22 @@ func (rf *Raft) RPCReqPoll() {
 				if leaderLastLogIndex >= serverNextIndex && leaderId != int32(serverId) {
 					go func(serverId int) {
 						for {		
-
+						 
 							rf.mu.Lock()
 							 
- 
+							 
 							
 							currTerm := rf.currentTerm
-							entriesToSend := rf.logs[serverNextIndex : len(rf.logs)]
+							logStartIdx := 0
+
+							if serverNextIndex >= 0 {
+								logStartIdx = serverNextIndex
+								 
+							}  
+							 
+
+							entriesToSend := rf.logs[logStartIdx : len(rf.logs)]
+								
 							prevLogIdx := serverNextIndex - 1
 							prevLogTerm := -1
 							if prevLogIdx >= 0 {
@@ -648,7 +665,9 @@ func (rf *Raft) RPCReqPoll() {
 							resp := rf.sendAppendEntry(serverId, &appendEntrArgs, &appendEntrReply)
 							if resp && appendEntrReply.Success {
 								
+							 
 								rf.mu.Lock()
+								//fmt.Println("Append Entr successful")
 								rf.matchIndex[serverId] = prevLogIdx + len(entriesToSend)
 								rf.nextIndex[serverId] = len(rf.logs)
 								rf.mu.Unlock()
@@ -657,7 +676,7 @@ func (rf *Raft) RPCReqPoll() {
 							} else {
 
 								rf.mu.Lock()
-
+								 
 								rf.nextIndex[serverId]--
 								serverNextIndex = rf.nextIndex[serverId]
 
