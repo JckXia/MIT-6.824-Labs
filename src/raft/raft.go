@@ -21,7 +21,7 @@ import (
 //	"bytes"
      "fmt"
 	"sync"
-	"math"
+//	"math"
 	"time"
 	"sync/atomic"
 	"math/rand"
@@ -91,6 +91,10 @@ type Raft struct {
 	matchIndex []int 
 
 	applyMsgChan chan ApplyMsg
+
+	peerWonElectionSig chan bool
+	peerGrantVoteCh chan bool
+	peerHeartBeatCh chan bool
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -213,53 +217,20 @@ type RequestVoteReply struct {
 // So what we are getting here is that...
 // We should ONLY reset the election timer if reply.Success= true
 // If it does not pass the checks (term check, w.e) we should not reset the election timer
+
+// could've been a lot more complex
 func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	reply.Term = rf.currentTerm
-	 
-	// Check 1: Reply false if term < currentTerm
-	if rf.currentTerm > args.Term {
-		 
+	
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
 		reply.Success = false
+		
 	} else {
-
-		rf.votesCnt = 0
-		rf.lastContactFromLeader = getCurrentTimeStamp()
-		rf.electionTimeout = rf.getElectionTimeout()
-		rf.currentTerm = args.Term
-		rf.electionState = Follower
-		// Empty entries means heart beat. Do NOT handle this like so.
-		// PrevLogIndex should be 0 in the beginning. Since it's empty
-		
-		if len(rf.logs) >= args.PrevLogIndex {
-			if len(rf.logs) == 0 ||  args.PrevLogIndex < 0 ||  rf.logs[args.PrevLogIndex].TermNumber == args.PrevLogTerm {
-				 			
-				for _, entry := range args.Entries {
-					rf.logs = append(rf.logs, entry)
-				}
- 
-			//	fmt.Println("appending logs ", rf.logs, " SERVER ", rf.me)	
-				if args.LeaderCommit > rf.commitIndex {
-					leaderCommit := float64(args.LeaderCommit)
-					lastEntryIdx := float64(len(rf.logs) - 1)
-					rf.commitIndex = int(math.Min(leaderCommit, lastEntryIdx))
-				}
-
-				reply.Success = true
-			} else if rf.logs[args.PrevLogIndex].TermNumber != args.PrevLogTerm{
-				
-				rf.logs = rf.logs[args.PrevLogIndex : len(rf.logs)]
-		
-				reply.Success = false
-			}
-		} else {
-			// Simply don't have that log entry. Treat it as if we have the entry but term did not match
-			reply.Success = false
-		}
- 
+		reply.Term = rf.currentTerm
+		reply.Success = true
 	}
-	 
 }
 
 // Candidate's log is at least as up to date as receiver's log 
@@ -345,9 +316,21 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+// This function should handle logic with respect with responses, etc
 func (rf *Raft) sendAppendEntry(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
  
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	
+	if !ok {
+		return false
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	
+	if reply.Term > rf.currentTerm {
+		rf.currentTerm = reply.Term
+	}
 
 	return ok
 }
@@ -384,7 +367,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.logs = append(rf.logs, newLog)
 	
 	index := len(rf.logs) - 1
-	fmt.Println("Leader ", rf.me," append log res ", rf.logs," index ", index)
+//	fmt.Println("Leader ", rf.me," append log res ", rf.logs," index ", index)
 	return index, term, isLeader
 }
 
@@ -709,13 +692,79 @@ func (rf *Raft) RPCReqPoll() {
 }
 
 
+func (rf * Raft) broadCastAppendEntry() {
+	if rf.electionState != Leader {
+		return;
+	}
+
+	for peerId := 0; peerId < len(rf.peers); peerId ++ {
+		if peerId != rf.me {
+			
+			currentTerm := rf.currentTerm
+			candidateId := int32(rf.me)
+			leaderPrevLogIndx := -1
+			leaderPrevLogTerm := -1
+			var emptyEntry [] Log;
+			leaderCommitIdx := 0
+			appendEntrArgs := AppendEntriesArgs {currentTerm, candidateId, leaderPrevLogIndx, leaderPrevLogTerm, emptyEntry, leaderCommitIdx}
+			appendEntrReply := AppendEntriesReply{}
+			go rf.sendAppendEntry(rf.me, &appendEntrArgs, &appendEntrReply)
+		}
+	}
+}
+
+func (rf *Raft) fetchElectionTimeout() time.Duration {
+	min := 400
+	max := 500
+	rand.Seed(makeSeed())
+	return time.Duration(rand.Intn(max - min + 1) + min) 
+}
+
+
 func (rf *Raft) getElectionTimeout() int {
 	min := 400
 	max := 500
 	rand.Seed(makeSeed())
-	return rand.Intn(max - min + 1) + min 
+	return rand.Intn(max - min + 1) + min
 }
 
+func (rf * Raft) stepDownToFollower() {
+	state := rf.state
+	rf.state = Follower
+	rf.currentTerm = term
+	rf.votedFor = -1
+
+	
+}
+
+func (rf * Raft) startPeerService() {
+	for rf.killed() == false {
+		rf.mu.Lock()
+		peerState := rf.electionState
+		rf.mu.Unlock()
+		switch peerState {
+			case Leader:
+				select {
+					case <-time.After(120 * time.Millisecond):
+					   // rf.broadCastAppendEntry()
+					}
+			case Candidate:
+				select { 
+					case <-rf.peerWonElectionSig:
+						// rf.convertToLeader()
+					case <-time.After(rf.fetchElectionTimeout() * time.Millisecond):
+						// rf.converToCandidate()		
+				}
+			case Follower:
+				select {
+					case <-rf.peerHeartBeatCh:
+					case <-rf.peerHeartBeatCh:
+					case <-time.After(rf.fetchElectionTimeout() * time.Millisecond):
+						// rf. converToCandidate()
+				}
+		}
+	}
+} 
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -746,7 +795,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.nextIndex = make([] int, len(rf.peers))
 	rf.matchIndex = make([] int, len(rf.peers))
- 
+	
+	// Set up channels
+	rf.peerWonElectionSig = make(chan bool)
+	rf.peerGrantVoteCh = make(chan bool)
+	rf.peerHeartBeatCh = make(chan bool)
 	// Your initialization code here (2A, 2B, 2C).
  
 	// initialize from state persisted before a crash
@@ -755,7 +808,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	go rf.ticker()
     go rf.RPCReqPoll()
-
+	fmt.Printf("")
 
 	return rf
 }
