@@ -187,8 +187,7 @@ type RequestVoteReply struct {
 	VoteGranted bool
 }
 
-// AppendEntries handler
-// atm just for handling heart beat
+// AppendEntries handler This is the receiver implementation
 func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	reply.Term = rf.currentTerm
@@ -199,10 +198,9 @@ func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRepl
 		reply.Success = false
 	} else {
 		 
-		// if rf.electionState == Candidate {
-		// 	rf.votesCnt = 0
-		// }
+ 
 		rf.votesCnt = 0
+		rf.votedFor = -1
 		rf.lastContactFromLeader = getCurrentTimeStamp()
 		rf.electionTimeout = rf.getElectionTimeout()
 		rf.currentTerm = args.Term	// This way we are ensuring the current term will always be up to date 
@@ -267,6 +265,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
  
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	if !ok {
+		 return ok
+	}
+
+	if (reply.Term > args.Term) {
+		rf.revertToFollower(reply.Term)
+	}
+ 
+
 	return ok
 }
 
@@ -274,6 +281,10 @@ func (rf *Raft) sendAppendEntry(server int, args *AppendEntriesArgs, reply *Appe
  
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 
+	if !reply.Success && reply.Term > args.Term {
+							 
+		rf.revertToFollower(reply.Term)
+	}
 	return ok
 }
 
@@ -331,23 +342,28 @@ func (rf * Raft) startElection() {
 	rf.votesCnt = 1
 }
 
-func (rf * Raft) revertToFollower(newTerm int) {
+func (rf * Raft) revertToFollower(newTerm int32) {
 	rf.electionState = Follower
 	rf.currentTerm = int32(newTerm)
 	rf.votedFor = -1
+	rf.votesCnt = 0
 	rf.lastContactFromLeader = getCurrentTimeStamp()
 	rf.electionTimeout = rf.getElectionTimeout()
 }
 
-func (rf  * Raft) convToCandidate() {
+// current raft instance can be considered as a candidate
+func (rf * Raft) convertToCandidate() {
+	rf.votesCnt = 1
+	rf.votedFor = int32(rf.me) 
+	rf.lastContactFromLeader = getCurrentTimeStamp()
+	rf.electionTimeout = rf.getElectionTimeout()
+	rf.electionState = Candidate
+}
 
-}	
 
 // The ticker go routine starts a new election if this peer hasn't received
 // Logic surrounding election start
 
-// lastContactFromLeader --- currentTimeStamp  -- lastContactFromLeader + electionTimeout
- 
 func (rf *Raft) ticker() {
  
 	for rf.killed() == false {
@@ -362,11 +378,7 @@ func (rf *Raft) ticker() {
 		if elapsedTime >= rf.electionTimeout && rf.electionState != Leader {
 
 			rf.currentTerm += 1
-			rf.votesCnt = 1
-			rf.votedFor = int32(rf.me) 
-			rf.lastContactFromLeader = getCurrentTimeStamp()
-			rf.electionTimeout = rf.getElectionTimeout()
-			rf.electionState = Candidate
+			rf.convertToCandidate()
 			rf.mu.Unlock()
 			
 		} else {
@@ -413,6 +425,7 @@ func (rf *Raft) RPCReqPoll() {
 					go func(serverId int) {
 						// This potentially could dead lock
 						 
+						// Wonder if i can get the rid of the first if statement too
 						status := rf.sendRequestVote(serverId, &reqVoteArgs, &reqVoteReply)
 						rf.mu.Lock()
 						if status && reqVoteReply.VoteGranted {
@@ -422,14 +435,7 @@ func (rf *Raft) RPCReqPoll() {
 								rf.electionState = Leader
 								elecCompl = true
 							}
-						} else if reqVoteReply.Term > currTerm {
-							rf.currentTerm = reqVoteReply.Term
-							rf.electionState = Follower
-							rf.votedFor = -1
-							rf.votesCnt = 0
-							rf.lastContactFromLeader = getCurrentTimeStamp()
-							rf.electionTimeout = rf.getElectionTimeout()
-						}
+						} 
 						rf.mu.Unlock()
 					}(serverId)
 				}
@@ -447,23 +453,8 @@ func (rf *Raft) RPCReqPoll() {
 				// rf.mu.Unlock()
 				if int(candidateId) != serverId { 
 					go func(serverId int) {
-						// This potentially could dead lock
-						// fmt.Println(appendEntrArgs,"  ", appendEntrReply)
 						rf.sendAppendEntry(serverId, &appendEntrArgs, &appendEntrReply)
-						// fmt.Println("Here! ") 
-						// rf.mu.Lock()
-						rf.mu.Lock()
-						if !appendEntrReply.Success && appendEntrReply.Term > currTerm {
-							 
-							rf.currentTerm = appendEntrReply.Term
-							rf.electionState = Follower
-							rf.votedFor = -1
-							rf.votesCnt = 0
-							rf.lastContactFromLeader = getCurrentTimeStamp()
-							rf.electionTimeout = rf.getElectionTimeout()
-
-						}
-						rf.mu.Unlock()
+ 
 					}(serverId)
 				}				 
 			}
@@ -473,7 +464,6 @@ func (rf *Raft) RPCReqPoll() {
 			rf.mu.Unlock()
 		}
 		time.Sleep(1 * time.Millisecond)
- 
 		
 	}
  
