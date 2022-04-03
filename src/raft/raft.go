@@ -412,9 +412,7 @@ func (rf *Raft) RPCReqPoll() {
 				reqVoteReply := RequestVoteReply{}
 				
 				if int(candidateId) != serverId {
-					go func(serverId int) {
-						rf.sendRequestVote(serverId, &reqVoteArgs, &reqVoteReply)
-					}(serverId)
+					go rf.sendRequestVote(serverId, &reqVoteArgs, &reqVoteReply)
 				}
 			}
 		 
@@ -429,10 +427,8 @@ func (rf *Raft) RPCReqPoll() {
 				appendEntrReply := AppendEntriesReply{}
 
 				if int(candidateId) != serverId { 
-					go func(serverId int) {
-						rf.sendAppendEntry(serverId, &appendEntrArgs, &appendEntrReply)
+					go rf.sendAppendEntry(serverId, &appendEntrArgs, &appendEntrReply)
  
-					}(serverId)
 				}				 
 			}
 		 
