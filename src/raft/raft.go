@@ -263,11 +263,17 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	if !ok {
 		 return ok
 	}
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 	if (reply.Term > args.Term) {
 		rf.revertToFollower(reply.Term)
-	}
- 
+	} else if (reply.VoteGranted) {
+		rf.votesCnt++
+		if rf.votesCnt > len(rf.peers) / 2 {
+			rf.electionState = Leader
+		}
+	} 
 
 	return ok
 }
@@ -275,11 +281,13 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 func (rf *Raft) sendAppendEntry(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
  
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	rf.mu.Lock()  
+	defer rf.mu.Unlock()
 
 	if !reply.Success && reply.Term > args.Term {
-							 
 		rf.revertToFollower(reply.Term)
 	}
+ 
 	return ok
 }
 
@@ -391,47 +399,21 @@ func (rf *Raft) RPCReqPoll() {
 	for rf.killed() == false {
 		
 		rf.mu.Lock()
-		// rf.mu.Lock()
 		electionState := rf.electionState
 		currTerm := rf.currentTerm
 		candidateId := int32(rf.me)
 		serverCnt := len(rf.peers)
-		elecCompl := false
+		
 		if electionState == Candidate {
-			
-			if serverCnt == 0 {
-				rf.mu.Unlock()
-				return
-			}
-			 
+ 
 			rf.mu.Unlock()	
 			for serverId := 0; serverId < serverCnt; serverId++ {
 				reqVoteArgs := RequestVoteArgs{currTerm, candidateId}
 				reqVoteReply := RequestVoteReply{}
 				
-				rf.mu.Lock()
-				if elecCompl {
-					rf.mu.Unlock()
-					break
-				}
-				rf.mu.Unlock()
-
 				if int(candidateId) != serverId {
 					go func(serverId int) {
-						// This potentially could dead lock
-						 
-						// Wonder if i can get the rid of the first if statement too
-						status := rf.sendRequestVote(serverId, &reqVoteArgs, &reqVoteReply)
-						rf.mu.Lock()
-						if status && reqVoteReply.VoteGranted {
-							rf.votesCnt++
-							
-							if rf.votesCnt > serverCnt / 2 {
-								rf.electionState = Leader
-								elecCompl = true
-							}
-						} 
-						rf.mu.Unlock()
+						rf.sendRequestVote(serverId, &reqVoteArgs, &reqVoteReply)
 					}(serverId)
 				}
 			}
@@ -445,7 +427,7 @@ func (rf *Raft) RPCReqPoll() {
 			for serverId := 0; serverId < serverCnt; serverId++ { 
 				appendEntrArgs := AppendEntriesArgs{currTerm, candidateId}
 				appendEntrReply := AppendEntriesReply{}
-				// rf.mu.Unlock()
+
 				if int(candidateId) != serverId { 
 					go func(serverId int) {
 						rf.sendAppendEntry(serverId, &appendEntrArgs, &appendEntrReply)
