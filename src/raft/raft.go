@@ -198,13 +198,8 @@ func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRepl
 		reply.Success = false
 	} else {
 		 
- 
-		rf.votesCnt = 0
-		rf.votedFor = -1
-		rf.lastContactFromLeader = getCurrentTimeStamp()
-		rf.electionTimeout = rf.getElectionTimeout()
-		rf.currentTerm = args.Term	// This way we are ensuring the current term will always be up to date 
-		rf.electionState = Follower
+		rf.revertToFollower(args.Term)
+		
 		reply.Success = true
 	}
  
