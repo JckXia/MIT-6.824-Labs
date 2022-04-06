@@ -61,6 +61,27 @@ type ApplyMsg struct {
 func getCurrentTimeStamp() int64 {
 	return time.Now().UnixNano() / int64(time.Millisecond)
 }
+
+type Log struct {
+	Command interface{}
+	TermNumber int
+}
+
+// This struct handles data around log replication
+// the first logs in this logs is "1"
+// Initially there are no logs, so last log index is 0 
+// nextIndex is then initialized to 1
+type LogManager struct {
+	logs []Log
+	commitIndex  int
+	lastApplied  int
+	nextIndex []int
+	matchIndex []int
+}
+
+func(lg *LogManager) getLastLogIndex() (int) {
+	return len(lg.logs) - 1
+}
 //
 // A Go object implementing a single Raft peer.
 //
@@ -79,6 +100,7 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	logManager *LogManager
 
 }
 
@@ -207,7 +229,7 @@ func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRepl
 	
 }
 
- 
+// RPC receiver implementation
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
@@ -228,35 +250,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Unlock()
 }
 
-//
-// example code to send a RequestVote RPC to a server.
-// server is the index of the target server in rf.peers[].
-// expects RPC arguments in args.
-// fills in *reply with RPC reply, so caller should
-// pass &reply.
-// the types of the args and reply passed to Call() must be
-// the same as the types of the arguments declared in the
-// handler function (including whether they are pointers).
-//
-// The labrpc package simulates a lossy network, in which servers
-// may be unreachable, and in which requests and replies may be lost.
-// Call() sends a request and waits for a reply. If a reply arrives
-// within a timeout interval, Call() returns true; otherwise
-// Call() returns false. Thus Call() may not return for a while.
-// A false return can be caused by a dead server, a live server that
-// can't be reached, a lost request, or a lost reply.
-//
-// Call() is guaranteed to return (perhaps after a delay) *except* if the
-// handler function on the server side does not return.  Thus there
-// is no need to implement your own timeouts around Call().
-//
-// look at the comments in ../labrpc/labrpc.go for more details.
-//
-// if you're having trouble getting RPC to work, check that you've
-// capitalized all field names in structs passed over RPC, and
-// that the caller passes the address of the reply struct with &, not
-// the struct itself.
-//
+ 
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
  
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
@@ -271,7 +265,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	} else if (reply.VoteGranted) {
 		rf.votesCnt++
 		if rf.votesCnt > len(rf.peers) / 2 {
-			rf.electionState = Leader
+			rf.convertToLeader()
 		}
 	} 
 
@@ -338,12 +332,6 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
-func (rf * Raft) startElection() {
-	rf.electionState = Candidate
-	rf.currentTerm +=1
-	rf.votedFor = int32(rf.me)
-	rf.votesCnt = 1
-}
 
 func (rf * Raft) revertToFollower(newTerm int32) {
 	rf.electionState = Follower
@@ -363,6 +351,15 @@ func (rf * Raft) convertToCandidate() {
 	rf.electionState = Candidate
 }
 
+func (rf *Raft) convertToLeader() {
+	rf.electionState = Leader
+	leaderLastLogIndex := rf.logManager.getLastLogIndex()
+	
+	for idx, _ := range rf.logManager.nextIndex {
+		rf.logManager.nextIndex[idx] = leaderLastLogIndex + 1
+		rf.logManager.matchIndex[idx] = 0
+	}
+}
 
 // The ticker go routine starts a new election if this peer hasn't received
 // Logic surrounding election start
@@ -419,8 +416,6 @@ func (rf *Raft) RPCReqPoll() {
 			 
 		} else if electionState == Leader {
 			 
-			 
-		 
 			rf.mu.Unlock()
 			for serverId := 0; serverId < serverCnt; serverId++ { 
 				appendEntrArgs := AppendEntriesArgs{currTerm, candidateId}
@@ -428,7 +423,6 @@ func (rf *Raft) RPCReqPoll() {
 
 				if int(candidateId) != serverId { 
 					go rf.sendAppendEntry(serverId, &appendEntrArgs, &appendEntrReply)
- 
 				}				 
 			}
 		 
@@ -474,6 +468,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.votesCnt = 0
 	rf.votedFor = -1
 
+	rf.logManager = &LogManager{}
+	// Append a mock log
+	rf.logManager.logs = append(rf.logManager.logs, Log{nil,-1})
+	rf.logManager.commitIndex = 0
+	rf.logManager.lastApplied = 0
+
+	rf.logManager.nextIndex = make([]int, len(rf.peers))
+	rf.logManager.matchIndex = make([]int, len(rf.peers))
 	// Your initialization code here (2A, 2B, 2C).
  
 	// initialize from state persisted before a crash
