@@ -182,6 +182,13 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 type AppendEntriesArgs struct {
 	Term int32
 	LeaderId int32
+
+	PrevLogIndex int32
+	
+	PrevLogTerm int32
+	Entries []Log
+
+	LeaderCommit int32
 }
 
 type AppendEntriesReply struct {
@@ -198,6 +205,8 @@ type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
 	Term int32
 	CandidateId int32
+	LastLogIndex int32
+	LastLogTerm int32
 }
 
 //
@@ -405,7 +414,7 @@ func (rf *Raft) RPCReqPoll() {
  
 			rf.mu.Unlock()	
 			for serverId := 0; serverId < serverCnt; serverId++ {
-				reqVoteArgs := RequestVoteArgs{currTerm, candidateId}
+				reqVoteArgs := RequestVoteArgs{currTerm, candidateId,-1,-1}
 				reqVoteReply := RequestVoteReply{}
 				
 				if int(candidateId) != serverId {
@@ -418,7 +427,7 @@ func (rf *Raft) RPCReqPoll() {
 			 
 			rf.mu.Unlock()
 			for serverId := 0; serverId < serverCnt; serverId++ { 
-				appendEntrArgs := AppendEntriesArgs{currTerm, candidateId}
+				appendEntrArgs := AppendEntriesArgs{currTerm, candidateId, -1,-1, nil, -1}
 				appendEntrReply := AppendEntriesReply{}
 
 				if int(candidateId) != serverId { 
