@@ -19,7 +19,7 @@ package raft
 
 import (
 //	"bytes"
-//	"fmt"
+	"fmt"
 	"sync"
 	"time"
 	"sync/atomic"
@@ -79,6 +79,7 @@ type LogManager struct {
 	matchIndex []int
 }
 
+// this function will return >= 0 (Logs will always have one entry in them)
 func(lg *LogManager) getLastLogIndex() (int) {
 	return len(lg.logs) - 1
 }
@@ -101,7 +102,7 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 	logManager *LogManager
-
+	applyMsgChan chan ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -220,11 +221,13 @@ type RequestVoteReply struct {
 
 // AppendEntries handler This is the receiver implementation
 func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+ 
+
 	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	reply.Term = rf.currentTerm
 	 
- 
-	if rf.currentTerm > args.Term {
+ 	if rf.currentTerm > args.Term {
 		 
 		reply.Success = false
 	} else {
@@ -233,9 +236,7 @@ func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRepl
 		
 		reply.Success = true
 	}
- 
-	rf.mu.Unlock()
-	
+ 	
 }
 
 // RPC receiver implementation
@@ -281,14 +282,26 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+// when do we set prevLogIndex? When new entries are receieved... last index - 1? 
 func (rf *Raft) sendAppendEntry(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
- 
+	
+	// This is ok
+	rf.mu.Lock()
+	leaderLastLogIndex := rf.logManager.getLastLogIndex()
+	if leaderLastLogIndex >= rf.logManager.nextIndex[server] {
+		args.Entries = rf.logManager.logs[leaderLastLogIndex:]
+	}
+
+	rf.mu.Unlock()
+
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	rf.mu.Lock()  
 	defer rf.mu.Unlock()
 
 	if !reply.Success && reply.Term > args.Term {
 		rf.revertToFollower(reply.Term)
+	} else {
+		// go rf.sendAppendEntry(server, args, reply)
 	}
  
 	return ok
@@ -308,14 +321,17 @@ func (rf *Raft) sendAppendEntry(server int, args *AppendEntriesArgs, reply *Appe
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
-//
+
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	term := int(rf.currentTerm) // Current term
+	newLog := Log{command, term}
 
-	// Your code here (2B).
-
+	rf.logManager.logs = append(rf.logManager.logs, newLog)
+	
+	index := rf.logManager.getLastLogIndex() // The index that command will appear if it's ever committed
+	isLeader := (rf.electionState == Leader) // True if server believes it is the leader
 
 	return index, term, isLeader
 }
@@ -372,13 +388,25 @@ func (rf *Raft) convertToLeader() {
 
 // The ticker go routine starts a new election if this peer hasn't received
 // Logic surrounding election start
+func (rf *Raft) applyLogToStateMachine(msg* ApplyMsg) {	
+	rf.applyMsgChan <- *msg
+}
 
 func (rf *Raft) ticker() {
  
 	for rf.killed() == false {
-	 
+		
 		rf.mu.Lock()
-		 
+		logManager := rf.logManager
+
+		// Half of these values in ApplyMsg is invalid
+		if logManager.commitIndex > logManager.lastApplied {
+			logManager.lastApplied++
+			logToApply := logManager.logs[logManager.lastApplied]
+			applyMsg := ApplyMsg{true, logToApply.Command, logManager.lastApplied, true, nil, -1,-1}
+			go rf.applyLogToStateMachine(&applyMsg)
+		}
+		
 		currentTimeStamp := getCurrentTimeStamp()
 		elapsedTime := int(currentTimeStamp - rf.lastContactFromLeader)
 		
@@ -400,6 +428,60 @@ func (rf *Raft) ticker() {
 	}
 }
 
+func max(valA int, valB int) (int) {
+	if valA >= valB {
+		return valA
+	}
+	return valB
+}
+
+// The logic here is that
+// A smarter way is probably to find all values from matchIndex > N, 
+// do a binary search to find values where log[N].term == currentTerm. Should do for now
+
+ 
+func (rf *Raft) setLeaderCommitIndex() {
+	
+	leaderCommitIdx := rf.logManager.commitIndex
+	followerMatchIndex := rf.logManager.matchIndex
+	peerCount := len(rf.peers)
+
+	targetMatchIdx := 0
+	// find the largest matchIndex value for which it is greater than the leader's commit idnex
+	for _, val := range followerMatchIndex {
+		if val > leaderCommitIdx {
+			targetMatchIdx = max(targetMatchIdx, val)
+		}
+	}
+
+	// if it's the same as leaderCommitIndex, return
+	if targetMatchIdx <= leaderCommitIdx {
+		return
+	}
+
+	majCnt := 0
+	// starting from leaderCommitIndex + 1, iterate untill we've reached the largest matchIndex
+	// check to see that the majority of values is greater than it.
+	for N := leaderCommitIdx + 1; N <= targetMatchIdx; N++ {
+		// Optimisation: If leader's log term number isn't current term, skip
+		if rf.logManager.logs[N].TermNumber == int(rf.currentTerm) {
+			
+			for _, matchVal := range rf.logManager.matchIndex {
+				if matchVal >= N {
+					majCnt++;
+				}
+			}
+
+			if majCnt > (peerCount/ 2) {
+				rf.logManager.commitIndex = N
+				return
+			} 
+		}
+		majCnt = 0
+	}
+
+}
+
 // For sending RPC requests as "leader"
 func (rf *Raft) RPCReqPoll() {
 	for rf.killed() == false {
@@ -407,12 +489,12 @@ func (rf *Raft) RPCReqPoll() {
 		rf.mu.Lock()
 		electionState := rf.electionState
 		currTerm := rf.currentTerm
-		candidateId := int32(rf.me)
 		serverCnt := len(rf.peers)
-		
+
 		if electionState == Candidate {
- 
+			candidateId := int32(rf.me)
 			rf.mu.Unlock()	
+			
 			for serverId := 0; serverId < serverCnt; serverId++ {
 				reqVoteArgs := RequestVoteArgs{currTerm, candidateId,-1,-1}
 				reqVoteReply := RequestVoteReply{}
@@ -424,16 +506,34 @@ func (rf *Raft) RPCReqPoll() {
 		 
 			 
 		} else if electionState == Leader {
-			 
+			leaderCommit := int32(rf.logManager.commitIndex)
+			leaderId := int32(rf.me)
+			leaderPrevLogIndex := int32(rf.logManager.getLastLogIndex() - 1)
+			leaderPrevLogTerm := int32(-1)
+			if leaderPrevLogIndex >= 0 {
+				// The idea is that if there's only 1 dummy entry in the logs, it 
+				// doesn't make sene to contain a leaderPrevLogTerm. Can't set it 
+				// to 0 as that's the initial term set by the state. -1 it is
+				leaderPrevLogTerm = int32(rf.logManager.logs[leaderPrevLogIndex].TermNumber)
+			}
+
 			rf.mu.Unlock()
 			for serverId := 0; serverId < serverCnt; serverId++ { 
-				appendEntrArgs := AppendEntriesArgs{currTerm, candidateId, -1,-1, nil, -1}
+				appendEntrArgs := AppendEntriesArgs{currTerm, leaderId, leaderPrevLogIndex,leaderPrevLogTerm, nil, leaderCommit}
 				appendEntrReply := AppendEntriesReply{}
-
-				if int(candidateId) != serverId { 
+				 
+				 
+				if int(leaderId) != serverId { 
+					// leader last log index >= nextIndex[serverId], where serverI is a follower
+					// AppendEntries should contain logs starting at nextIndex				
 					go rf.sendAppendEntry(serverId, &appendEntrArgs, &appendEntrReply)
 				}				 
 			}
+
+			rf.mu.Lock()
+			rf.setLeaderCommitIndex()
+			rf.mu.Unlock()
+ 
 		 
 		}  else {
 			
@@ -467,6 +567,8 @@ func (rf *Raft) getElectionTimeout() int {
 //
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
+	fmt.Println("init raft services! ", me)
+
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
@@ -486,7 +588,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.logManager.nextIndex = make([]int, len(rf.peers))
 	rf.logManager.matchIndex = make([]int, len(rf.peers))
 	// Your initialization code here (2A, 2B, 2C).
- 
+	rf.applyMsgChan = applyCh
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
