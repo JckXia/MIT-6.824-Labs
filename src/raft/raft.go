@@ -248,14 +248,18 @@ func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRepl
 			firstEntr := args.Entries[0]
 			if firstEntr.TermNumber != rf.logManager.logs[currIdxPosition].TermNumber {
 				// TODO potentially need a check here, since args.PrevLogIndex is -1
-				rf.logManager.logs = rf.logManager.logs[:(args.PrevLogIndex)]
+				if currIdxPosition == 0 {
+					rf.logManager.logs = rf.logManager.logs[:0]
+				} else {
+					rf.logManager.logs = rf.logManager.logs[:(args.PrevLogIndex)]
+				}
   			}
 		}
 
 		// Append any new entry not already in the log
 		// starting at currIdxPosition, ending at the entires
 		for _, entry := range args.Entries {
-			  if int(currIdxPosition) > len(rf.logManager.logs) {
+			  if int(currIdxPosition) >= len(rf.logManager.logs) {
 				rf.logManager.logs = append(rf.logManager.logs, entry)
 				currIdxPosition++
 			  }
@@ -284,7 +288,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	} else {
 		 rf.currentTerm = args.Term
 		 rf.electionState = Follower
-		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+		if (rf.votedFor == -1 || rf.votedFor == args.CandidateId ) &&  rf.candidateIsAsUpToDate(args) {
 			rf.lastContactFromLeader = getCurrentTimeStamp()
 			rf.electionTimeout = rf.getElectionTimeout()
 			rf.votedFor = args.CandidateId
@@ -295,6 +299,24 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Unlock()
 }
 
+func (rf * Raft) candidateIsAsUpToDate(args *RequestVoteArgs) (bool) {
+	// if logs have last entries with different
+	receiverLastLogIdx := int(rf.logManager.getLastLogIndex())
+	receiverLastLogTerm := int(rf.logManager.logs[receiverLastLogIdx].TermNumber)
+
+	candidateLastLogTerm := int(args.LastLogTerm)
+	candidateLastLogIdx := int(args.LastLogIndex)
+
+	if receiverLastLogTerm < candidateLastLogTerm {
+		return true
+	}	
+
+	if receiverLastLogTerm == candidateLastLogTerm && candidateLastLogIdx >= receiverLastLogIdx {
+		return true
+	} 
+	
+	return false;
+} 
  
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
  
@@ -335,7 +357,15 @@ func (rf *Raft) sendAppendEntry(server int, args *AppendEntriesArgs, reply *Appe
 		}
 
 		if reply.Success {
-			 
+			// if sendAppendEntry successful, update nextIndex and matchIndex for follower
+			rf.mu.Lock()
+			matchIdx := int(args.PrevLogIndex) + len(args.Entries)
+			if matchIdx > rf.logManager.matchIndex[server] {
+				rf.logManager.matchIndex[server] = matchIdx
+			}
+			rf.logManager.nextIndex[server] = rf.logManager.matchIndex[server] + 1
+			rf.mu.Unlock()
+			
 			return ok
 		}
 
@@ -347,8 +377,12 @@ func (rf *Raft) sendAppendEntry(server int, args *AppendEntriesArgs, reply *Appe
 			return false
 
 		} else if !reply.Success {
+			//This could only occur if there exist a log discrepency
 			// TODO implement nextIndex decrement logic here
-			return false
+			// return falserf
+			rf.mu.Lock()
+			rf.logManager.nextIndex[server]--
+			rf.mu.Unlock()
 		}
 
 	}
@@ -437,8 +471,8 @@ func (rf *Raft) convertToLeader() {
 
 // The ticker go routine starts a new election if this peer hasn't received
 // Logic surrounding election start
-func (rf *Raft) applyLogToStateMachine(msg* ApplyMsg) {	
-	rf.applyMsgChan <- *msg
+func (rf *Raft) applyLogToStateMachine(msg ApplyMsg) {	
+	rf.applyMsgChan <- msg
 }
 
 func (rf *Raft) ticker() {
@@ -446,14 +480,14 @@ func (rf *Raft) ticker() {
 	for rf.killed() == false {
 		
 		rf.mu.Lock()
-		logManager := rf.logManager
+ 
 
 		// Half of these values in ApplyMsg is invalid
-		if logManager.commitIndex > logManager.lastApplied {
-			logManager.lastApplied++
-			logToApply := logManager.logs[logManager.lastApplied]
-			applyMsg := ApplyMsg{true, logToApply.Command, logManager.lastApplied, true, nil, -1,-1}
-			go rf.applyLogToStateMachine(&applyMsg)
+		if rf.logManager.commitIndex > rf.logManager.lastApplied {
+			rf.logManager.lastApplied++
+			logToApply := rf.logManager.logs[rf.logManager.lastApplied]
+			applyMsg := ApplyMsg{true, logToApply.Command, rf.logManager.lastApplied, true, nil, -1,-1}
+			go rf.applyLogToStateMachine(applyMsg)
 		}
 		
 		currentTimeStamp := getCurrentTimeStamp()
@@ -559,7 +593,14 @@ func (rf *Raft) RPCReqPoll() {
 			for serverId := 0; serverId < serverCnt; serverId++ {
 				reqVoteArgs := RequestVoteArgs{currTerm, candidateId,lastCanLogIdx,lastLogTerm}
 				reqVoteReply := RequestVoteReply{}
-				
+
+				rf.mu.Lock()
+				if rf.electionState == Leader {
+					rf.mu.Unlock()
+					break
+				}
+				rf.mu.Unlock()
+
 				if int(candidateId) != serverId {
 					go rf.sendRequestVote(serverId, &reqVoteArgs, &reqVoteReply)
 				}
