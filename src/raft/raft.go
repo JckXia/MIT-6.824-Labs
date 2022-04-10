@@ -408,14 +408,19 @@ func (rf *Raft) sendAppendEntry(server int, args *AppendEntriesArgs, reply *Appe
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	isLeader := bool(rf.electionState == Leader) // True if server believes it is the leader
+	if !isLeader {
+		return -1, int(rf.currentTerm), false
+	}
+
 	term := int(rf.currentTerm) // Current term
 	newLog := Log{command, term}
 
 	rf.logManager.logs = append(rf.logManager.logs, newLog)
 	
 	index := rf.logManager.getLastLogIndex() // The index that command will appear if it's ever committed
-	isLeader := (rf.electionState == Leader) // True if server believes it is the leader
-
+ 
 	return index, term, isLeader
 }
 
@@ -486,6 +491,7 @@ func (rf *Raft) ticker() {
 		if rf.logManager.commitIndex > rf.logManager.lastApplied {
 			rf.logManager.lastApplied++
 			logToApply := rf.logManager.logs[rf.logManager.lastApplied]
+			fmt.Println("server ", rf.me, " applying log ", rf.logManager.lastApplied," TERM ", logToApply.TermNumber)
 			applyMsg := ApplyMsg{true, logToApply.Command, rf.logManager.lastApplied, true, nil, -1,-1}
 			go rf.applyLogToStateMachine(applyMsg)
 		}
