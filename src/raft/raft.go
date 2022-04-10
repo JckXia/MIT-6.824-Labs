@@ -222,16 +222,49 @@ type RequestVoteReply struct {
 // AppendEntries handler This is the receiver implementation
 func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
  
-
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	reply.Term = rf.currentTerm
 	 
- 	if rf.currentTerm > args.Term {
-		 
-		reply.Success = false
+ 	if args.Term < rf.currentTerm { 
+		reply.Success = false	// Checks off first condition
 	} else {
-		 
+		
+		// this guard prevents the initial case
+		if args.PrevLogIndex >= 0 &&
+			 (int(args.PrevLogIndex) >= len(rf.logManager.logs) ||
+			 rf.logManager.logs[args.PrevLogIndex].TermNumber != int(args.PrevLogTerm)) {
+			 reply.Success = false
+			 return
+		}
+
+		// if an existing entry conflict witha a new one 
+		// (same index) different terms, delete existing entry and all that follow it
+		currIdxPosition := args.PrevLogIndex + 1
+		
+		// I think the entries we are relying on prevLogIndex to insert and not just blinding overwriting stuff from the follower
+		if len(args.Entries) > 0 &&  int(currIdxPosition) < len(rf.logManager.logs) {
+			firstEntr := args.Entries[0]
+			if firstEntr.TermNumber != rf.logManager.logs[currIdxPosition].TermNumber {
+				// TODO potentially need a check here, since args.PrevLogIndex is -1
+				rf.logManager.logs = rf.logManager.logs[:(args.PrevLogIndex)]
+  			}
+		}
+
+		// Append any new entry not already in the log
+		// starting at currIdxPosition, ending at the entires
+		for _, entry := range args.Entries {
+			  if int(currIdxPosition) > len(rf.logManager.logs) {
+				rf.logManager.logs = append(rf.logManager.logs, entry)
+				currIdxPosition++
+			  }
+		}
+		
+		if int(args.LeaderCommit) > rf.logManager.commitIndex {
+			rf.logManager.commitIndex = min(int(args.LeaderCommit), int(rf.logManager.getLastLogIndex()))
+		}
+
 		rf.revertToFollower(args.Term)
 		
 		reply.Success = true
@@ -240,6 +273,8 @@ func (rf * Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRepl
 }
 
 // RPC receiver implementation
+// checks if candidate's log is at least up to date as receiver's log
+// TODO implemented logic to check if log is updated
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
@@ -284,27 +319,41 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 // when do we set prevLogIndex? When new entries are receieved... last index - 1? 
 func (rf *Raft) sendAppendEntry(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	
-	// This is ok
-	rf.mu.Lock()
-	leaderLastLogIndex := rf.logManager.getLastLogIndex()
-	if leaderLastLogIndex >= rf.logManager.nextIndex[server] {
-		args.Entries = rf.logManager.logs[leaderLastLogIndex:]
-	}
+ 
+	for {
+		rf.mu.Lock()
+		leaderLastLogIndex := rf.logManager.getLastLogIndex()
+		if leaderLastLogIndex >= rf.logManager.nextIndex[server] {
+			args.Entries = rf.logManager.logs[leaderLastLogIndex:]
+		}
+		rf.mu.Unlock()
+		ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+		
+		// Check for network response!
+		if !ok {
+			return false
+		}
 
-	rf.mu.Unlock()
+		if reply.Success {
+			 
+			return ok
+		}
 
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	rf.mu.Lock()  
-	defer rf.mu.Unlock()
+		if !reply.Success && reply.Term > args.Term {
 
-	if !reply.Success && reply.Term > args.Term {
-		rf.revertToFollower(reply.Term)
-	} else {
-		// go rf.sendAppendEntry(server, args, reply)
+			rf.mu.Lock()
+			rf.revertToFollower(reply.Term)
+			rf.mu.Unlock()
+			return false
+
+		} else if !reply.Success {
+			// TODO implement nextIndex decrement logic here
+			return false
+		}
+
 	}
  
-	return ok
+	return false
 }
 
 
@@ -435,6 +484,14 @@ func max(valA int, valB int) (int) {
 	return valB
 }
 
+func min(valA int, valB int) (int) {
+	if valA >= valB {
+		return valB
+	}
+	return valA
+}
+
+
 // The logic here is that
 // A smarter way is probably to find all values from matchIndex > N, 
 // do a binary search to find values where log[N].term == currentTerm. Should do for now
@@ -493,10 +550,14 @@ func (rf *Raft) RPCReqPoll() {
 
 		if electionState == Candidate {
 			candidateId := int32(rf.me)
+
+			lastCanLogIdx := int32(rf.logManager.getLastLogIndex())
+			lastLogTerm := int32(rf.logManager.logs[lastCanLogIdx].TermNumber)
+
 			rf.mu.Unlock()	
 			
 			for serverId := 0; serverId < serverCnt; serverId++ {
-				reqVoteArgs := RequestVoteArgs{currTerm, candidateId,-1,-1}
+				reqVoteArgs := RequestVoteArgs{currTerm, candidateId,lastCanLogIdx,lastLogTerm}
 				reqVoteReply := RequestVoteReply{}
 				
 				if int(candidateId) != serverId {
