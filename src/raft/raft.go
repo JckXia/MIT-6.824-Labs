@@ -21,6 +21,7 @@ import (
 //	"bytes"
 	"sync"
 	"time"
+ 
 	"sync/atomic"
 	//"util"
 	//"fmt"
@@ -97,10 +98,11 @@ func (rf *Raft) GetState() (int, bool) {
 	
 	rf.mu.Lock()
 	var isLeader = rf.me == rf.leaderId
+	var currTerm = rf.currentTerm
 	defer rf.mu.Unlock()
 	// var isLeader = rf.me == rf.leaderId
 	// Your code here (2A).
-	return rf.currentTerm, isLeader 
+	return currTerm, isLeader 
 }
 
 //
@@ -209,7 +211,7 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	
+	 
 	// Your code here (2A, 2B).
 	rf.mu.Lock() // Need to ensure the data is consistent
 	candidate_term := args.Term
@@ -217,15 +219,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	host_term := rf.currentTerm
 
 	rf.termCheck(candidate_term)
-
+	
 	if candidate_term < host_term {
 		reply.VoteGranted = false 
 	} else {
+ 
 		if (host_voted == HAS_NOT_VOTED || host_voted == args.CandidateId) && rf.candidateLogIsUpToDate(args.LastLogIndex, args.LastLogTerm, candidate_term) {
+			 
 			rf.votedFor = args.CandidateId
 			reply.VoteGranted = true
+			rf.lastContactWithPeer = time.Now()
 		}
-		rf.lastContactWithPeer = time.Now()
 	}
 
 	rf.mu.Unlock()
@@ -254,6 +258,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 	} else {
 		rf.lastContactWithPeer = time.Now()
+		rf.leaderId = args.LeaderId
+
 		reply.Success = true
 	}
 
@@ -297,10 +303,11 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 	rf.mu.Lock()
 	rf.termCheck(reply.Term)
-	
-	if rf.nodeStatus == Candidate {
+ 
+	if rf.nodeStatus == Candidate && reply.VoteGranted == true{
 		rf.votesReceived++
 	}
+	 
 	rf.lastContactWithPeer = time.Now()
 	rf.mu.Unlock()
 	
@@ -311,7 +318,11 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	rf.mu.Lock()
 	rf.termCheck(reply.Term)
-	rf.lastContactWithPeer = time.Now()
+	
+	if reply.Success == true {
+	   rf.lastContactWithPeer = time.Now()
+	}
+ 
 	rf.mu.Unlock()
 	return ok
 }
@@ -371,7 +382,10 @@ func (rf *Raft) lifeCycleManager() {
 		rf.mu.Lock()
 		now := time.Now()
 
-		if rf.nodeStatus == Follower && (now.Sub(rf.lastContactWithPeer) > time.Duration(rf.electionTimeout) ) {
+		elapsed := now.Sub(rf.lastContactWithPeer)
+ 
+		if rf.nodeStatus == Follower && (elapsed > (time.Duration(rf.electionTimeout) * time.Millisecond)) {
+ 
 			rf.followerTransitionToCandidate()
 		} 
 		rf.mu.Unlock()
@@ -380,13 +394,14 @@ func (rf *Raft) lifeCycleManager() {
 		rf.mu.Lock()
 		
 		if rf.nodeStatus == Candidate {
+			 
 			if rf.votesReceived > (len(rf.peers)/2) {
 				// Congrats you won
 				rf.candidateTransitionToLeader()
 			} else {
 				// Check for election timeouts
 				elaspedTime := time.Now().Sub(rf.lastContactWithPeer)
-				if elaspedTime > time.Duration(rf.electionTimeout) {
+				if elaspedTime > (time.Duration(rf.electionTimeout) * time.Millisecond)  {
 					rf.candidateStartElection(rf.me, rf.currentTerm)
 				}
 			}
@@ -413,6 +428,7 @@ func (rf * Raft) LeaderHeartBeatManager() {
 
 // This may be where election happens
 func (rf * Raft) followerTransitionToCandidate() {
+ 
 	rf.currentTerm++
 	rf.votedFor = rf.me 
 	rf.lastContactWithPeer = time.Now()
@@ -426,7 +442,12 @@ func (rf * Raft) followerTransitionToCandidate() {
 }
 
 func (rf * Raft) candidateStartElection(candidateId int, candidateTerm int) {
-	requestVoteArgs := RequestVoteArgs{candidateTerm, candidateId, 0,0}
+	requestVoteArgs := RequestVoteArgs{candidateTerm, candidateId, 0,0} 
+	rf.votedFor = rf.me
+	rf.votesReceived = 1
+	rf.lastContactWithPeer = time.Now()
+	rf.electionTimeout = rf.getNewElectionTimeout()
+
 	for peerId := range rf.peers {
 		if peerId != candidateId {
 			go rf.sendRequestVote(peerId,&requestVoteArgs, &RequestVoteReply{})
@@ -462,6 +483,8 @@ func (rf * Raft) leaderTransitionToFollower() {
 
 func (rf *Raft) setStateToFollower(peerTerm int) {
 	rf.currentTerm = peerTerm
+	rf.votedFor = HAS_NOT_VOTED
+	rf.votesReceived = 0 
 	rf.nodeStatus = Follower
 }
 //  Check Used for all RPC request/response
@@ -490,7 +513,7 @@ func (rf * Raft) bootStrapState(hostServerId int) {
 	rf.votesReceived = 0
 	
 	rf.lastContactWithPeer = time.Now()
-	rf.electionTimeout = rf.getNewElectionTimeout()
+	rf.electionTimeout = RandRange(10,400)
 }
 //
 // the service or tester wants to create a Raft server. the ports
