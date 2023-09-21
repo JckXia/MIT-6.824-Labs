@@ -21,12 +21,18 @@ import (
 //	"bytes"
 	"sync"
 	"sync/atomic"
-
+	//"util"
+	//"fmt"
 //	"6.824/labgob"
 	"6.824/labrpc"
 )
+var HAS_NOT_VOTED int= -1
 
-
+const (
+	Follower int = 0
+	Candidate  	 = 1
+	Leader		 = 2
+)
 //
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -60,10 +66,23 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
+	leaderId int				  // Raft saves a copy of the leader state
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+	currentTerm int 
+	votedFor int
+	log []Log
 
+	commitIndex int
+	lastApplied int
+
+	nodeStatus int 
+}
+
+// Utility function. Caller should guarantee its threadsafe
+func (rf * Raft) AppendNewLog(newLog Log) {
+	rf.log = append(rf.log, newLog)
 }
 
 // return currentTerm and whether this server
@@ -136,12 +155,35 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
+type Log struct {
+	CommandValid bool
+	Command interface{}
+	CommandTerm int 
+}
+
+type AppendEntriesArgs struct {
+	Term int
+	LeaderId int
+	PrevLogIndex int
+	PrevLogTerm int
+	Entries []Log
+	LeaderCommit int
+}
+
+type AppendEntriesReply struct {
+	Term int
+	Success bool
+}
 
 //
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
+	term int
+	candidateId int
+	lastLogIndex int 
+	lastLogTerm int
 	// Your data here (2A, 2B).
 }
 
@@ -151,6 +193,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	term int
+	voteGranted bool
 }
 
 //
@@ -249,10 +293,22 @@ func (rf *Raft) ticker() {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-
+		
 	}
 }
 
+
+func (rf * Raft) bootStrapState(hostServerId int) {
+	rf.me = hostServerId
+	rf.votedFor = HAS_NOT_VOTED
+	rf.leaderId = HAS_NOT_VOTED
+	// Raft logs start at 1 and not 0. Stub out a log
+	rf.AppendNewLog(Log{true, "ok", -1})
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+
+	rf.nodeStatus = Follower
+}
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -269,7 +325,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
-	rf.me = me
+
+	rf.bootStrapState(me)
+
+	// 2A initialization code
+		
+	// 2B initialization code
 
 	// Your initialization code here (2A, 2B, 2C).
 
