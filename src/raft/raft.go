@@ -88,11 +88,10 @@ func (rf * Raft) AppendNewLog(newLog Log) {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
-	var term int
-	var isleader bool
+	
+	var isLeader = rf.me == rf.leaderId
 	// Your code here (2A).
-	return term, isleader
+	return rf.currentTerm, isLeader 
 }
 
 //
@@ -180,10 +179,10 @@ type AppendEntriesReply struct {
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
-	term int
-	candidateId int
-	lastLogIndex int 
-	lastLogTerm int
+	Term int
+	CandidateId int
+	LastLogIndex int 
+	LastLogTerm int
 	// Your data here (2A, 2B).
 }
 
@@ -193,15 +192,52 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
-	term int
-	voteGranted bool
+	Term int
+	VoteGranted bool
 }
 
 //
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	
 	// Your code here (2A, 2B).
+	rf.mu.Lock() // Need to ensure the data is consistent
+	candidate_term := args.Term
+	host_voted := rf.votedFor
+	host_term := rf.currentTerm
+	if candidate_term < host_term {
+		reply.VoteGranted = false 
+	} else {
+		if (host_voted == HAS_NOT_VOTED || host_voted == args.CandidateId) && rf.candidateLogIsUpToDate(args.LastLogIndex, args.LastLogTerm, candidate_term) {
+			rf.votedFor = args.CandidateId
+			reply.VoteGranted = true
+		}
+	}
+
+	rf.mu.Unlock()
+}
+
+func (rf * Raft) candidateLogIsUpToDate(candidateLastLogIndex int, candidateLastLogTerm int, candidateTerm int) (bool) {
+	return true;
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	
+	rf.mu.Lock()
+
+	candidate_term := args.Term
+	host_term := rf.currentTerm
+
+	reply.Term = host_term
+
+	if candidate_term < host_term {
+		reply.Success = false
+	} else {
+		reply.Success = true
+	}
+
+	rf.mu.Unlock()
 }
 
 //
@@ -235,6 +271,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
@@ -297,6 +338,23 @@ func (rf *Raft) ticker() {
 	}
 }
 
+// This may be where election happens
+func (rf * Raft) followerTransitionToCandidate() {
+
+}
+
+func (rf *Raft) candidateTransitionToFollower() {
+
+}
+
+func (rf * Raft) candidateTransitionToLeader() {
+
+}
+
+func (rf * Raft) leaderTransitionToFollower() {
+
+}
+
 
 func (rf * Raft) bootStrapState(hostServerId int) {
 	rf.me = hostServerId
@@ -328,6 +386,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.bootStrapState(me)
 
+		
 	// 2A initialization code
 		
 	// 2B initialization code
