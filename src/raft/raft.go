@@ -271,7 +271,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 }
 
 func (rf *Raft) getNewElectionTimeout() int {
-	return RandRange(10,500)
+	return RandRange(230,400)
 }
 //
 // example code to send a RequestVote RPC to a server.
@@ -408,7 +408,7 @@ func (rf *Raft) lifeCycleManager() {
 				// Check for election timeouts
 				elaspedTime := time.Now().Sub(rf.lastContactWithPeer)
 				if elaspedTime > (time.Duration(rf.electionTimeout) * time.Millisecond)  {
-					rf.candidateStartElection(rf.me, rf.currentTerm)
+					rf.candidateStartElection()
 				}
 			}
 		}
@@ -434,7 +434,7 @@ func (rf * Raft) LeaderHeartBeatManager() {
 		}
 		rf.mu.Unlock()
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(180 * time.Millisecond)
 	}
 }
 
@@ -442,31 +442,31 @@ func (rf * Raft) LeaderHeartBeatManager() {
 func (rf * Raft) followerTransitionToCandidate() {
 	
 	 
-	rf.currentTerm++
-	rf.votedFor = rf.me 
-	rf.lastContactWithPeer = time.Now()
-	rf.electionTimeout = rf.getNewElectionTimeout()
+	//rf.currentTerm++
+	//rf.votedFor = rf.me 
+	//rf.lastContactWithPeer = time.Now()
+	//rf.electionTimeout = rf.getNewElectionTimeout()
 	rf.nodeStatus = Candidate
-
-	candidateTerm := rf.currentTerm
-	candidateId := rf.me 
+	// candidateTerm := rf.currentTerm
+	// candidateId := rf.me 
 	DPrintf("Server id %d became candidate for term %d ", rf.me, rf.currentTerm)
 
-	rf.candidateStartElection(candidateId, candidateTerm)
+	rf.candidateStartElection()
 }
 
-func (rf * Raft) candidateStartElection(candidateId int, candidateTerm int) {
+func (rf * Raft) candidateStartElection() {
  
-	requestVoteArgs := RequestVoteArgs{candidateTerm, candidateId, 0,0} 
+	 
 	rf.votedFor = rf.me
 	rf.currentTerm++
 	rf.votesReceived = 1
 	rf.lastContactWithPeer = time.Now()
 	rf.electionTimeout = rf.getNewElectionTimeout()
+	requestVoteArgs := RequestVoteArgs{rf.currentTerm, rf.me, 0,0} 
 	DPrintf("Candidate id %d is starting an election for term %d ", rf.me, rf.currentTerm)
 
 	for peerId := range rf.peers {
-		if peerId != candidateId {
+		if peerId != rf.me {
 			go rf.sendRequestVote(peerId,&requestVoteArgs, &RequestVoteReply{})
 		}
 	}
@@ -534,7 +534,7 @@ func (rf * Raft) bootStrapState(hostServerId int) {
 	rf.votesReceived = 0
 	
 	rf.lastContactWithPeer = time.Now()
-	rf.electionTimeout = RandRange(10,400)
+	rf.electionTimeout = rf.getNewElectionTimeout()
 }
 //
 // the service or tester wants to create a Raft server. the ports
