@@ -418,7 +418,7 @@ func (rf *Raft) lifeCycleManager() {
 
 		// Todo: Make this random
 		// duration := 10 * time.Millisecond
-		time.Sleep(time.Duration(RandRange(10,25))* time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
