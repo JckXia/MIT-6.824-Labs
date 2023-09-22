@@ -270,9 +270,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Unlock()
 }
 
+// What if we design an exponeial backoff wrt number of failed tries?
 func (rf *Raft) getNewElectionTimeout() int {
 	return RandRange(230,400)
 }
+
 //
 // example code to send a RequestVote RPC to a server.
 // server is the index of the target server in rf.peers[].
