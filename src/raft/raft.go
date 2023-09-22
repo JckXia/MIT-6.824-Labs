@@ -97,11 +97,11 @@ func (rf * Raft) AppendNewLog(newLog Log) {
 func (rf *Raft) GetState() (int, bool) {
 	
 	rf.mu.Lock()
-	var isLeader = rf.me == rf.leaderId
-	var currTerm = rf.currentTerm
 	defer rf.mu.Unlock()
-	// var isLeader = rf.me == rf.leaderId
-	// Your code here (2A).
+
+	var isLeader = rf.nodeStatus == Leader
+	var currTerm = rf.currentTerm
+	DPrintf("server %d term: %d ", rf.me, currTerm) 
 	return currTerm, isLeader 
 }
 
@@ -216,15 +216,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock() // Need to ensure the data is consistent
 	candidate_term := args.Term
 	host_voted := rf.votedFor
-	host_term := rf.currentTerm
+	host_term := rf.currentTerm  
 
+	DPrintf("Host %d (%s, term: %d) recv RequestVoteRPC from (pid: %d, term: %d) ", rf.me, GetServerState(rf.nodeStatus), rf.currentTerm, args.CandidateId, candidate_term)
 	rf.termCheck(candidate_term)
-	
+	reply.Term = host_term
+
 	if candidate_term < host_term {
 		reply.VoteGranted = false 
 	} else {
  
-		if (host_voted == HAS_NOT_VOTED || host_voted == args.CandidateId) && rf.candidateLogIsUpToDate(args.LastLogIndex, args.LastLogTerm, candidate_term) {
+		if rf.nodeStatus == Follower && (host_voted == HAS_NOT_VOTED || host_voted == args.CandidateId) && rf.candidateLogIsUpToDate(args.LastLogIndex, args.LastLogTerm, candidate_term) {
 			 
 			rf.votedFor = args.CandidateId
 			reply.VoteGranted = true
@@ -242,32 +244,34 @@ func (rf * Raft) candidateLogIsUpToDate(candidateLastLogIndex int, candidateLast
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	
 	rf.mu.Lock()
-
-	candidate_term := args.Term
+  	candidate_term := args.Term
 	host_term := rf.currentTerm
-
-	reply.Term = host_term
-
+ 
+	DPrintf("Host %d (%s, term: %d) recv AppendEntriesRPC from (pid: %d, term: %d) ", rf.me, GetServerState(rf.nodeStatus), rf.currentTerm, args.LeaderId, candidate_term)
+	
 	check_result := rf.termCheck(candidate_term)
+	reply.Term  = rf.currentTerm
 
 	if check_result == false {
 		rf.leaderId = args.LeaderId
 	}
 
 	if candidate_term < host_term {
+	 
 		reply.Success = false
 	} else {
 		rf.lastContactWithPeer = time.Now()
 		rf.leaderId = args.LeaderId
-
+		
 		reply.Success = true
 	}
+ 
 
 	rf.mu.Unlock()
 }
 
 func (rf *Raft) getNewElectionTimeout() int {
-	return RandRange(150,300)
+	return RandRange(10,500)
 }
 //
 // example code to send a RequestVote RPC to a server.
@@ -302,8 +306,10 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 
 	rf.mu.Lock()
+	DPrintf("Host %d (%s, term: %d) sent RequestVoteRPC to (pid: %d)", rf.me,  GetServerState(rf.nodeStatus), rf.currentTerm, server)
 	rf.termCheck(reply.Term)
  
+
 	if rf.nodeStatus == Candidate && reply.VoteGranted == true{
 		rf.votesReceived++
 	}
@@ -316,9 +322,11 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+ 
 	rf.mu.Lock()
+	 
 	rf.termCheck(reply.Term)
-	
+ 
 	if reply.Success == true {
 	   rf.lastContactWithPeer = time.Now()
 	}
@@ -385,7 +393,6 @@ func (rf *Raft) lifeCycleManager() {
 		elapsed := now.Sub(rf.lastContactWithPeer)
  
 		if rf.nodeStatus == Follower && (elapsed > (time.Duration(rf.electionTimeout) * time.Millisecond)) {
- 
 			rf.followerTransitionToCandidate()
 		} 
 		rf.mu.Unlock()
@@ -394,9 +401,8 @@ func (rf *Raft) lifeCycleManager() {
 		rf.mu.Lock()
 		
 		if rf.nodeStatus == Candidate {
-			 
 			if rf.votesReceived > (len(rf.peers)/2) {
-				// Congrats you won
+	 
 				rf.candidateTransitionToLeader()
 			} else {
 				// Check for election timeouts
@@ -409,26 +415,33 @@ func (rf *Raft) lifeCycleManager() {
 		rf.mu.Unlock()
 
 		// Todo: Make this random
-		duration := 10 * time.Millisecond
-		time.Sleep(duration)
+		// duration := 10 * time.Millisecond
+		time.Sleep(time.Duration(RandRange(10,25))* time.Millisecond)
 	}
 }
 
+// 3 heart beats
+// 1/3 seconds
+// 10 heart beats a second 
 func (rf * Raft) LeaderHeartBeatManager() {
 	for rf.killed() == false {
 		rf.mu.Lock()
+		leaderId := rf.me 
+		leaderTerm := rf.currentTerm
+
 		if rf.nodeStatus == Leader {
-			go rf.leaderSendHeartBeatMessages()
+			go rf.leaderSendHeartBeatMessages(leaderId, leaderTerm)
 		}
 		rf.mu.Unlock()
 
-		time.Sleep(13 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
 // This may be where election happens
 func (rf * Raft) followerTransitionToCandidate() {
- 
+	
+	 
 	rf.currentTerm++
 	rf.votedFor = rf.me 
 	rf.lastContactWithPeer = time.Now()
@@ -437,16 +450,20 @@ func (rf * Raft) followerTransitionToCandidate() {
 
 	candidateTerm := rf.currentTerm
 	candidateId := rf.me 
+	DPrintf("Server id %d became candidate for term %d ", rf.me, rf.currentTerm)
 
 	rf.candidateStartElection(candidateId, candidateTerm)
 }
 
 func (rf * Raft) candidateStartElection(candidateId int, candidateTerm int) {
+ 
 	requestVoteArgs := RequestVoteArgs{candidateTerm, candidateId, 0,0} 
 	rf.votedFor = rf.me
+	rf.currentTerm++
 	rf.votesReceived = 1
 	rf.lastContactWithPeer = time.Now()
 	rf.electionTimeout = rf.getNewElectionTimeout()
+	DPrintf("Candidate id %d is starting an election for term %d ", rf.me, rf.currentTerm)
 
 	for peerId := range rf.peers {
 		if peerId != candidateId {
@@ -459,9 +476,9 @@ func (rf * Raft) candidateStartElection(candidateId int, candidateTerm int) {
 
 // }
 
-func (rf * Raft) leaderSendHeartBeatMessages() {
-	leaderTerm := rf.currentTerm
-	leaderId := rf.me 
+func (rf * Raft) leaderSendHeartBeatMessages(leaderId int, leaderTerm int) {
+	// leaderTerm := rf.currentTerm
+	// leaderId := rf.me 
 
 	appendEntriesArgs := AppendEntriesArgs{leaderTerm, leaderId, 0,0,nil, 0}
 
@@ -474,7 +491,11 @@ func (rf * Raft) leaderSendHeartBeatMessages() {
 
 func (rf * Raft) candidateTransitionToLeader() {
 	rf.leaderId = rf.me 
-	rf.leaderSendHeartBeatMessages()
+	rf.nodeStatus = Leader
+	 
+	DPrintf("Server id %d  became leader for term %d ", rf.me , rf.currentTerm)
+
+	rf.leaderSendHeartBeatMessages(rf.me, rf.currentTerm)
 }
 
 func (rf * Raft) leaderTransitionToFollower() {
@@ -545,7 +566,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.lifeCycleManager()
-
+    go rf.LeaderHeartBeatManager()
 
 	return rf
 }

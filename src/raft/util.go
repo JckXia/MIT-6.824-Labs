@@ -7,7 +7,7 @@ import (
 )
 
 // Debugging
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -22,4 +22,16 @@ func RandRange(min, max int) int {
     }
     rand.Seed(time.Now().UnixNano())
     return min + rand.Intn(max-min)
+}
+
+func GetServerState(serverState int) (string){
+	if serverState == Follower {
+		return "Follower"
+	}
+
+	if serverState == Candidate {
+		return "Candidate"
+	}
+
+	return "Leader"
 }
