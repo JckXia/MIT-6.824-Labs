@@ -9,8 +9,8 @@ import (
 // Debugging
 const Debug = false
 
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
+func DPrintf(debugLevels string, format string, a ...interface{}) (n int, err error) {
+	if Debug && debugLevels == LOG_LEVEL_ELECTION {
 		log.Printf(format, a...)
 	}
 	return

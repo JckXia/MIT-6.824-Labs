@@ -29,6 +29,8 @@ import (
 	"6.824/labrpc"
 )
 var HAS_NOT_VOTED int= -1
+var LOG_LEVEL_ELECTION ="election"
+var LOG_LEVEL_REPLICATION="log_replication"
 
 const (
 	Follower int = 0
@@ -101,7 +103,7 @@ func (rf *Raft) GetState() (int, bool) {
 
 	var isLeader = rf.nodeStatus == Leader
 	var currTerm = rf.currentTerm
-	DPrintf("server %d term: %d ", rf.me, currTerm) 
+	DPrintf(LOG_LEVEL_ELECTION, "server %d term: %d ", rf.me, currTerm) 
 	return currTerm, isLeader 
 }
 
@@ -218,7 +220,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	host_voted := rf.votedFor
 	host_term := rf.currentTerm  
 
-	DPrintf("Host %d (%s, term: %d) recv RequestVoteRPC from (pid: %d, term: %d) ", rf.me, GetServerState(rf.nodeStatus), rf.currentTerm, args.CandidateId, candidate_term)
+	DPrintf(LOG_LEVEL_ELECTION, "Host %d (%s, term: %d) recv RequestVoteRPC from (pid: %d, term: %d) ", rf.me, GetServerState(rf.nodeStatus), rf.currentTerm, args.CandidateId, candidate_term)
 	rf.termCheck(candidate_term)
 	reply.Term = host_term
 
@@ -247,7 +249,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
   	candidate_term := args.Term
 	host_term := rf.currentTerm
  
-	DPrintf("Host %d (%s, term: %d) recv AppendEntriesRPC from (pid: %d, term: %d) ", rf.me, GetServerState(rf.nodeStatus), rf.currentTerm, args.LeaderId, candidate_term)
+	DPrintf(LOG_LEVEL_ELECTION, "Host %d (%s, term: %d) recv AppendEntriesRPC from (pid: %d, term: %d) ", rf.me, GetServerState(rf.nodeStatus), rf.currentTerm, args.LeaderId, candidate_term)
 	
 	check_result := rf.termCheck(candidate_term)
 	reply.Term  = rf.currentTerm
@@ -308,7 +310,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 
 	rf.mu.Lock()
-	DPrintf("Host %d (%s, term: %d) sent RequestVoteRPC to (pid: %d)", rf.me,  GetServerState(rf.nodeStatus), rf.currentTerm, server)
+	DPrintf(LOG_LEVEL_ELECTION, "Host %d (%s, term: %d) sent RequestVoteRPC to (pid: %d)", rf.me,  GetServerState(rf.nodeStatus), rf.currentTerm, server)
 	rf.termCheck(reply.Term)
  
 
@@ -451,7 +453,7 @@ func (rf * Raft) followerTransitionToCandidate() {
 	rf.nodeStatus = Candidate
 	// candidateTerm := rf.currentTerm
 	// candidateId := rf.me 
-	DPrintf("Server id %d became candidate for term %d ", rf.me, rf.currentTerm)
+	DPrintf(LOG_LEVEL_ELECTION,"Server id %d became candidate for term %d ", rf.me, rf.currentTerm)
 
 	rf.candidateStartElection()
 }
@@ -465,7 +467,7 @@ func (rf * Raft) candidateStartElection() {
 	rf.lastContactWithPeer = time.Now()
 	rf.electionTimeout = rf.getNewElectionTimeout()
 	requestVoteArgs := RequestVoteArgs{rf.currentTerm, rf.me, 0,0} 
-	DPrintf("Candidate id %d is starting an election for term %d ", rf.me, rf.currentTerm)
+	DPrintf(LOG_LEVEL_ELECTION,"Candidate id %d is starting an election for term %d ", rf.me, rf.currentTerm)
 
 	for peerId := range rf.peers {
 		if peerId != rf.me {
@@ -495,7 +497,7 @@ func (rf * Raft) candidateTransitionToLeader() {
 	rf.leaderId = rf.me 
 	rf.nodeStatus = Leader
 	 
-	DPrintf("Server id %d  became leader for term %d ", rf.me , rf.currentTerm)
+	DPrintf(LOG_LEVEL_ELECTION, "Server id %d  became leader for term %d ", rf.me , rf.currentTerm)
 
 	rf.leaderSendHeartBeatMessages(rf.me, rf.currentTerm)
 }
