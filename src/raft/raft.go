@@ -112,7 +112,7 @@ func (rf *Raft) GetState() (int, bool) {
 
 	var isLeader = rf.nodeStatus == Leader
 	var currTerm = rf.currentTerm
-	DPrintf(LOG_LEVEL_ELECTION, "server %d term: %d ", rf.me, currTerm) 
+	DPrintf(LOG_LEVEL_ELECTION, "server %d term: %d , isLeader: %t", rf.me, currTerm, isLeader) 
 	return currTerm, isLeader 
 }
 
@@ -248,7 +248,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock() // Need to ensure the data is consistent
 	candidate_term := args.Term
-	host_voted := rf.votedFor
 	host_term := rf.currentTerm  
 
 	DPrintf(LOG_LEVEL_ELECTION, "Host %d (%s, term: %d) recv RequestVoteRPC from (pid: %d, term: %d) ", rf.me, GetServerState(rf.nodeStatus), rf.currentTerm, args.CandidateId, candidate_term)
@@ -259,11 +258,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = false 
 	} else {
  
-		if rf.nodeStatus == Follower && (host_voted == HAS_NOT_VOTED || host_voted == args.CandidateId) && rf.candidateLogIsUpToDate(args.LastLogIndex, args.LastLogTerm, candidate_term) {
+		if rf.nodeStatus == Follower && (rf.votedFor == HAS_NOT_VOTED || rf.votedFor == args.CandidateId) && rf.candidateLogIsUpToDate(args.LastLogIndex, args.LastLogTerm, candidate_term) {
 			 
 			rf.votedFor = args.CandidateId
 			reply.VoteGranted = true
 			rf.lastContactWithPeer = time.Now()
+			DPrintf(LOG_LEVEL_ELECTION, "Host %d granted vote for candidate %d on term %d", rf.me, rf.votedFor, candidate_term)
 		}
 	}
 
@@ -381,6 +381,11 @@ func (rf *Raft) getNewElectionTimeout() int {
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	
+	if !ok {
+		DPrintf(LOG_LEVEL_ELECTION,"Servers %d is unreachable", server)
+		return ok
+	}
 
 	rf.mu.Lock()
 	DPrintf(LOG_LEVEL_ELECTION, "Host %d (%s, term: %d) sent RequestVoteRPC to (pid: %d)", rf.me,  GetServerState(rf.nodeStatus), rf.currentTerm, server)
@@ -390,6 +395,10 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	if rf.nodeStatus == Candidate && reply.VoteGranted == true{
 		rf.votesReceived++
 	}
+
+	// if rf.votesReceived > (len(rf.peers)/2) {
+	// 	rf.candidateTransitionToLeader()
+	// }
 	 
 	rf.lastContactWithPeer = time.Now()
 	rf.mu.Unlock()
@@ -399,7 +408,10 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
- 
+	if !ok {
+		DPrintf(LOG_LEVEL_ELECTION,"Servers %d is unreachable", server)
+		return ok
+	}
 	rf.mu.Lock()
 	 
 	rf.termCheck(reply.Term)
@@ -565,7 +577,8 @@ func (rf * Raft) leaderSendHeartBeatMessages(leaderId int, leaderTerm int) {
 	// leaderTerm := rf.currentTerm
 	// leaderId := rf.me 
 
-	appendEntriesArgs := AppendEntriesArgs{leaderTerm, leaderId, 0,0,nil, 0}
+	emptyEntries := make([]Log,0)
+	appendEntriesArgs := AppendEntriesArgs{leaderTerm, leaderId, 0,0, emptyEntries, 0}
 
 	for peerId := range rf.peers {
 		if peerId != leaderId {

@@ -8,8 +8,9 @@ import (
 
 // Debugging
 const Debug = false
-
+ 
 func DPrintf(debugLevels string, format string, a ...interface{}) (n int, err error) {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	if Debug && debugLevels == LOG_LEVEL_ELECTION {
 		log.Printf(format, a...)
 	}
