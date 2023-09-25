@@ -24,7 +24,7 @@ import (
  
 	"sync/atomic"
 	//"util"
-	//"fmt"
+	// "fmt"
 //	"6.824/labgob"
 	"6.824/labrpc"
 )
@@ -76,7 +76,7 @@ type Raft struct {
 	// state a Raft server must maintain.
 	currentTerm int 
 	votedFor int
-	log []Log
+	logs []Log
 
 	commitIndex int
 	lastApplied int
@@ -86,12 +86,21 @@ type Raft struct {
 
 	// Election timeout info
 	lastContactWithPeer time.Time
-	electionTimeout int 
+	electionTimeout int
+
+	applyCh chan ApplyMsg
+
+	nextIndex  map[int]int 
+	matchIndex map[int]int
+
+	// Reserved for leader to keep track of its commitIndex
+	leaderCommitWaterMark int
+	followerReplicationCount int // Once this value > 50% we reset leader commitIndex
 }
 
 // Utility function. Caller should guarantee its threadsafe
 func (rf * Raft) AppendNewLog(newLog Log) {
-	rf.log = append(rf.log, newLog)
+	rf.logs = append(rf.logs, newLog)
 }
 
 // return currentTerm and whether this server
@@ -158,13 +167,35 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	return true
 }
 
+func (rf *Raft) appendLogEntry(command interface{}){
+	newLog := Log{true, command, rf.currentTerm}
+	rf.logs = append(rf.logs, newLog)
+}
+
+func (rf *Raft) deleteLogSuffix(startIdx int) {
+	if startIdx < len(rf.logs) {
+		rf.logs = append(rf.logs[:startIdx])
+	}
+}
+
+// At any given moment, there will be at least one entry in rf.logs
+//	because raft logs are index'd by 1
+func (rf *Raft) getLastLogIdx() int {
+	return len(rf.logs) -1
+}
+
+func (rf *Raft) getLastLogTerm() (int) {
+	lastLogIdx := rf.getLastLogIdx()
+	return rf.logs[lastLogIdx].CommandTerm
+}
+
+
 // the service says it has created a snapshot that has
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
-
 }
 
 type Log struct {
@@ -240,6 +271,23 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 }
 
 func (rf * Raft) candidateLogIsUpToDate(candidateLastLogIndex int, candidateLastLogTerm int, candidateTerm int) (bool) {
+	hostLastLogTerm := rf.getLastLogTerm()
+	hostLastLogIdx := rf.getLastLogIdx()
+
+	if candidateLastLogTerm < hostLastLogTerm {
+		return false
+	}
+
+	if candidateLastLogTerm > hostLastLogTerm {
+		return true
+	}
+
+	if candidateLastLogTerm == hostLastLogTerm {
+		if candidateLastLogIndex < hostLastLogIdx {
+			return false
+		}
+	}
+
 	return true;
 }
 
@@ -259,8 +307,22 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	if candidate_term < host_term {
-	 
 		reply.Success = false
+
+	} else if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == false {
+		rf.lastContactWithPeer = time.Now()
+		rf.leaderId = args.LeaderId
+		reply.Success = false
+		
+		rf.deleteLogSuffix(args.PrevLogIndex)
+		for _, newLogEntry := range args.Entries {
+			rf.logs = append(rf.logs, newLogEntry)
+		}
+		
+		if args.LeaderCommit > rf.commitIndex {
+			rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIdx())
+		}
+
 	} else {
 		rf.lastContactWithPeer = time.Now()
 		rf.leaderId = args.LeaderId
@@ -270,6 +332,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
  
 
 	rf.mu.Unlock()
+}
+
+func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm int) bool {
+	if rf.getLastLogIdx() < leaderPrevLogIdx {
+		return false
+	}
+
+	if rf.logs[leaderPrevLogIdx].CommandTerm != leaderPrevLogTerm {
+		return false	
+	}
+	return true
 }
 
 // What if we design an exponeial backoff wrt number of failed tries?
@@ -355,13 +428,22 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	index := -1
 	term := -1
-	isLeader := true
+	isLeader := rf.nodeStatus == Leader
+	if isLeader == false {
+		return index, term, isLeader
+	}
 
-	// Your code here (2B).
-
-
+	// Client have reached the leader instance
+	rf.appendLogEntry(command)
+	index = rf.getLastLogIdx()
+	term = rf.getLastLogTerm()
+ 
 	return index, term, isLeader
 }
 
@@ -392,10 +474,18 @@ func (rf *Raft) lifeCycleManager() {
 	for rf.killed() == false {
 
 		rf.mu.Lock()
+		
+		if rf.commitIndex > rf.lastApplied {
+			rf.lastApplied++
+			logEntryToCommit := rf.logs[rf.lastApplied]
+			applyMsg := ApplyMsg{true, logEntryToCommit.Command, rf.lastApplied, true,nil, 0,0}
+			rf.applyCh <- applyMsg
+		}
+
 		now := time.Now()
 
 		elapsed := now.Sub(rf.lastContactWithPeer)
- 
+		
 		if rf.nodeStatus == Follower && (elapsed > (time.Duration(rf.electionTimeout) * time.Millisecond)) {
 			rf.followerTransitionToCandidate()
 		} 
@@ -418,8 +508,6 @@ func (rf *Raft) lifeCycleManager() {
 		}
 		rf.mu.Unlock()
 
-		// Todo: Make this random
-		// duration := 10 * time.Millisecond
 		time.Sleep(5 * time.Millisecond)
 	}
 }
@@ -445,14 +533,7 @@ func (rf * Raft) LeaderHeartBeatManager() {
 // This may be where election happens
 func (rf * Raft) followerTransitionToCandidate() {
 	
-	 
-	//rf.currentTerm++
-	//rf.votedFor = rf.me 
-	//rf.lastContactWithPeer = time.Now()
-	//rf.electionTimeout = rf.getNewElectionTimeout()
 	rf.nodeStatus = Candidate
-	// candidateTerm := rf.currentTerm
-	// candidateId := rf.me 
 	DPrintf(LOG_LEVEL_ELECTION,"Server id %d became candidate for term %d ", rf.me, rf.currentTerm)
 
 	rf.candidateStartElection()
@@ -466,7 +547,7 @@ func (rf * Raft) candidateStartElection() {
 	rf.votesReceived = 1
 	rf.lastContactWithPeer = time.Now()
 	rf.electionTimeout = rf.getNewElectionTimeout()
-	requestVoteArgs := RequestVoteArgs{rf.currentTerm, rf.me, 0,0} 
+	requestVoteArgs := RequestVoteArgs{rf.currentTerm, rf.me, rf.getLastLogIdx(), rf.getLastLogTerm()} 
 	DPrintf(LOG_LEVEL_ELECTION,"Candidate id %d is starting an election for term %d ", rf.me, rf.currentTerm)
 
 	for peerId := range rf.peers {
@@ -498,6 +579,12 @@ func (rf * Raft) candidateTransitionToLeader() {
 	rf.nodeStatus = Leader
 	 
 	DPrintf(LOG_LEVEL_ELECTION, "Server id %d  became leader for term %d ", rf.me , rf.currentTerm)
+	
+	leaderLastLogIdx := rf.getLastLogIdx() + 1
+	for peerId := range rf.peers {
+		rf.nextIndex[peerId] = leaderLastLogIdx
+		rf.matchIndex[peerId] = 0
+	}
 
 	rf.leaderSendHeartBeatMessages(rf.me, rf.currentTerm)
 }
@@ -530,7 +617,7 @@ func (rf * Raft) bootStrapState(hostServerId int) {
 	rf.votedFor = HAS_NOT_VOTED
 	rf.leaderId = HAS_NOT_VOTED
 	// Raft logs start at 1 and not 0. Stub out a log
-	rf.AppendNewLog(Log{true, "ok", -1})
+	rf.AppendNewLog(Log{true, "ok", 0})
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 
@@ -539,6 +626,11 @@ func (rf * Raft) bootStrapState(hostServerId int) {
 	
 	rf.lastContactWithPeer = time.Now()
 	rf.electionTimeout = rf.getNewElectionTimeout()
+	
+	rf.nextIndex = make(map[int]int)
+	rf.matchIndex = make(map[int]int)
+
+	rf.leaderCommitWaterMark = 0
 }
 //
 // the service or tester wants to create a Raft server. the ports
@@ -556,9 +648,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
-
-	rf.bootStrapState(me)
+	rf.applyCh = applyCh
 	
+	rf.bootStrapState(me)
+
 	// 2A initialization code
 		
 	// 2B initialization code
