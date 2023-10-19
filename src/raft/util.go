@@ -9,13 +9,23 @@ import (
 // Debugging
 const Debug = false
  
+ 
 func DPrintf(debugLevels string, format string, a ...interface{}) (n int, err error) {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	if Debug && debugLevels == LOG_LEVEL_ELECTION {
 		log.Printf(format, a...)
 	}
+
+	if debugLevels == LOG_LEVEL_WARN{
+		log.Printf(format, a...)
+	}
+
 	return
 }
+
+func DebugPrintf(format string, a ...interface{}) {
+	log.Printf(format, a...)
+} 
 
 func RandRange(min, max int) int {
     if min >= max {

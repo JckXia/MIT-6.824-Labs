@@ -31,6 +31,7 @@ import (
 var HAS_NOT_VOTED int= -1
 var LOG_LEVEL_ELECTION ="election"
 var LOG_LEVEL_REPLICATION="log_replication"
+var LOG_LEVEL_WARN="warn"
 
 const (
 	Follower int = 0
@@ -167,12 +168,17 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	return true
 }
 
+// ************************* LOG OPERATIONS ***************// 
 func (rf *Raft) appendLogEntry(command interface{}){
 	newLog := Log{true, command, rf.currentTerm}
 	rf.logs = append(rf.logs, newLog)
 }
 
 func (rf *Raft) deleteLogSuffix(startIdx int) {
+	if startIdx <= 0 || startIdx >= len(rf.logs) {
+		DPrintf(LOG_LEVEL_WARN, "Warning! attempting to delete log out of bound at idx: %d", startIdx)	
+	}
+	
 	if startIdx < len(rf.logs) {
 		rf.logs = append(rf.logs[:startIdx])
 	}
@@ -184,10 +190,19 @@ func (rf *Raft) getLastLogIdx() int {
 	return len(rf.logs) -1
 }
 
-func (rf *Raft) getLastLogTerm() (int) {
+func (rf *Raft) getLastLog() Log {
 	lastLogIdx := rf.getLastLogIdx()
-	return rf.logs[lastLogIdx].CommandTerm
+	return rf.logs[lastLogIdx]
 }
+
+func (rf *Raft) getLastLogTerm() (int) {
+	log := rf.getLastLog()
+	return log.CommandTerm
+}
+
+ 
+
+// ********************************************************//
 
 
 // the service says it has created a snapshot that has
