@@ -174,13 +174,13 @@ func (rf *Raft) appendLogEntry(command interface{}){
 	rf.logs = append(rf.logs, newLog)
 }
 
-func (rf *Raft) deleteLogSuffix(startIdx int) {
-	if startIdx <= 0 || startIdx >= len(rf.logs) {
-		DPrintf(LOG_LEVEL_WARN, "Warning! attempting to delete log out of bound at idx: %d", startIdx)	
+func (rf *Raft) deleteLogSuffix(startLogIdx int) {
+	if startLogIdx <= 0 || startLogIdx >= len(rf.logs) {
+		DPrintf(LOG_LEVEL_WARN, "Warning! attempting to delete log out of bound at idx: %d", startLogIdx)	
 	}
-	
-	if startIdx < len(rf.logs) {
-		rf.logs = append(rf.logs[:startIdx])
+
+	if startLogIdx < len(rf.logs) {
+		rf.logs = append(rf.logs[:startLogIdx])
 	}
 }
 
@@ -200,7 +200,29 @@ func (rf *Raft) getLastLogTerm() (int) {
 	return log.CommandTerm
 }
 
- 
+// Retrieve all logs starting at some log index
+func (rf *Raft) getLeaderLogs(startLogIdx int) []Log {
+	if startLogIdx >= rf.getLastLogIdx() + 1 {
+		DPrintf(LOG_LEVEL_WARN, "Warning! attempting to retrieve log out of bound at idx: %d", startLogIdx)
+	}
+	return rf.logs[startLogIdx:]
+}
+
+// Converge logs from leader
+func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) {
+	logs := *leaderLogs
+
+	if startLogIdx >= len(rf.logs) {
+		DPrintf(LOG_LEVEL_WARN, "Warning! attempting to delete log out of bound %d", startLogIdx)
+	}
+
+	rf.logs = rf.logs[:startLogIdx]
+	
+	for i :=0; i < len(logs); i++ {
+		// DebugPrintf("%s", logs[i].Command)
+		rf.logs = append(rf.logs, logs[i])
+	}
+}
 
 // ********************************************************//
 
