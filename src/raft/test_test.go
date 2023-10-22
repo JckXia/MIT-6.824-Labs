@@ -126,7 +126,7 @@ func TestBasicAgree2B(t *testing.T) {
 
 	cfg.begin("Test (2B): basic agreement")
 
-	iters := 1
+	iters := 3
 	for index := 1; index < iters+1; index++ {
 		 
 		nd, _ := cfg.nCommitted(index)
