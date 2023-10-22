@@ -7,7 +7,7 @@ import (
 )
 
 // Debugging
-const Debug = true
+const Debug = false
  
  
 func DPrintf(debugLevels string, format string, a ...interface{}) (n int, err error) {

@@ -359,7 +359,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 
 	} else if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == false {
-		DPrintf(LOG_LEVEL_REPLICATION, "Host %d does not contain log %d from leader %d", rf.me, args.PrevLogIndex, args.LeaderId)
+	//	DPrintf(LOG_LEVEL_REPLICATION, "Host %d does not contain log %d from leader %d", rf.me, args.PrevLogIndex, args.LeaderId)
 		rf.lastContactWithPeer = time.Now()
 		rf.leaderId = args.LeaderId
 		reply.Success = false
@@ -374,8 +374,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Success = true
 
 		rf.acceptLogsFromLeader(&args.Entries, args.PrevLogIndex + 1)
-		//rf.printLogContent()
-		DPrintf(LOG_LEVEL_REPLICATION,"(Host %d) Leader commit index %d log len %d", rf.me, args.LeaderCommit, len(args.Entries))
+		//rf.printLogContent() 
+		// DPrintf(LOG_LEVEL_REPLICATION,"(Host %d, Commit idx: %d) Leader commit index %d log len %d", rf.me, rf.commitIndex, args.LeaderCommit, len(args.Entries))
 		if args.LeaderCommit > rf.commitIndex {
 		 
 			rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIdx())
@@ -490,13 +490,12 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		return ok
 	}
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
+	
 	host_term := rf.currentTerm
 	if reply.Term > host_term {
 		DPrintf(LOG_LEVEL_ELECTION, "Server %d is no longer the leader ", rf.me)
 		rf.setStateToFollower(reply.Term)
-
+		rf.mu.Unlock()
 		return true;
 	}
  
@@ -505,40 +504,43 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	   rf.lastContactWithPeer = time.Now()
 	   rf.nextIndex[server] = rf.getLastLogIdx() + 1
 	   rf.matchIndex[server] = rf.getLastLogIdx()
+	   
 	  //DPrintf(LOG_LEVEL_REPLICATION,"Match value peer %d match up to  %d", server, rf.matchIndex[server])
 	   for N := rf.commitIndex + 1; N <= rf.getLastLogIdx(); N++ {
-	 
+		 
 			serverReplicatedCount := 0
 			for peerId := range rf.peers {
 				if rf.matchIndex[peerId] >= N {
 					serverReplicatedCount++
 				}
-			 
-				if serverReplicatedCount > (len(rf.peers)/2) {
- 
+				// DPrintf(LOG_LEVEL_REPLICATION, "replicated to %d servers", serverReplicatedCount)
+				 
+				if serverReplicatedCount >= (len(rf.peers)/2) {
+				//	DPrintf(LOG_LEVEL_REPLICATION, "Server replicated count %d ", serverReplicatedCount)
 					if rf.logs[N].CommandTerm == rf.currentTerm {
 						rf.commitIndex = N
-						DPrintf(LOG_LEVEL_REPLICATION, "Leader Set commit index to %d", N)
+				//		DPrintf(LOG_LEVEL_REPLICATION, "Leader Set commit index to %d", N)
 					}
 				}
 			}
 	   }
-
+	   rf.mu.Unlock()
 	   return true	
 	} else if reply.LogConsistent == false && rf.nodeStatus == Leader {
-		DPrintf(LOG_LEVEL_REPLICATION, "Leader (%d) has log inconsit with Peer %d ", rf.me, server)
+	//	DPrintf(LOG_LEVEL_WARN, "Retrying happened~! %d ", args.PrevLogIndex)
 		rf.nextIndex[server]--
 		
 		args.PrevLogIndex = rf.nextIndex[server] - 1
 		args.PrevLogTerm = rf.logs[args.PrevLogIndex].CommandTerm
-		
+		args.Entries = rf.getLeaderLogs(rf.nextIndex[server])
+		rf.mu.Unlock()
 	} else {
 		// replied failed either
 		//	-> reply.Success = false, failed due to server aggrements
+		rf.mu.Unlock()
 		return false
 	} 
-		
-	rf.mu.Unlock()
+
 	time.Sleep(2* time.Millisecond)
 	}
 	return true
