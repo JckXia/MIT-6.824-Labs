@@ -101,7 +101,51 @@ func TestRaftOverwriteMiddleLogFromLeader(t *testing.T) {
 	assert.Equal(raftFollwer.logs[5].Command, "Leader Write X -> 5")
 }
 
+/**
+			0 	 1	2  3  4 5  6
+Leader   Stub   L1 L4 L5  
+Follower Stub   F1 F2 F3 F3 F4 F5
 
+Leader send logs  [L4,L5], idx 2, L2 conflicts with F2, OVERWRITE
+
+Follower should end up with [S, F1,L4,L5]
+**/
+func TestRaftOverwriteMShorterFromLeader(t *testing.T) {
+	raftLeader := generateRaftLaderWithYLogs(t, 0)
+	raftFollwer := generateRaftWithXLogs(t,0)
+ 
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 1",1})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 2",4})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 3",5})
+	
+	
+	raftFollwer.logs = append(raftFollwer.logs, Log{true, "Write X -> 1",1})
+	raftFollwer.logs = append(raftFollwer.logs, Log{true, "Write X -> 2",3})
+	raftFollwer.logs = append(raftFollwer.logs, Log{true, "Write X -> 3",3})
+	raftFollwer.logs = append(raftFollwer.logs, Log{true, "Write X -> 3",3})
+	raftFollwer.logs = append(raftFollwer.logs, Log{true, "Write X -> 4",4})
+	raftFollwer.logs = append(raftFollwer.logs, Log{true, "Write X -> 5",5})
+	assert := assert.New(t)
+ 
+	raftLeaderLogs := raftLeader.getLeaderLogs(2)
+	assert.Equal(len(raftLeaderLogs),2)
+
+	raftFollwer.acceptLogsFromLeader(&raftLeaderLogs, 2)
+	assert.Equal(len(raftFollwer.logs),4)
+	assert.Equal(raftFollwer.logs[1].Command, "Write X -> 1")
+	assert.Equal(raftFollwer.logs[2].Command, "Leader Write X -> 2")
+    assert.Equal(raftFollwer.logs[3].Command, "Leader Write X -> 3")
+}
+
+func TestRaftLogConverge(t *testing.T) {
+	raftLeader := generateRaftLaderWithYLogs(t, 3)
+	raftFollwer := generateRaftWithXLogs(t,3)
+	assert := assert.New(t)
+	
+	raftLeaderLogs := raftLeader.getLeaderLogs(2)
+	raftFollwer.acceptLogsFromLeader(&raftLeaderLogs,2)
+	assert.Equal(len(raftFollwer.logs),3 + 1)
+}
 /**
 			0 	 1	2  3  4 5
 Leader   Stub   L1 L2 L3 L4 L5 
@@ -124,7 +168,7 @@ func TestRaftOverwriteLastLogFromLeader(t * testing.T) {
 	assert.Equal(len(raftFollwer.logs), 6)
 	assert.Equal(raftFollwer.logs[1].Command, "Write X -> 1")
 	assert.Equal(raftFollwer.logs[2].Command, "Write X -> 2")
-	assert.Equal(raftFollwer.logs[3].Command, "Leader Write X -> 3")
+	assert.Equal(raftFollwer.logs[3].Command, "Write X -> 3")
 	assert.Equal(raftFollwer.logs[4].Command, "Leader Write X -> 4")
 	assert.Equal(raftFollwer.logs[5].Command, "Leader Write X -> 5")
 }
@@ -153,9 +197,9 @@ func TestRaftOverwriteFirstLogFromLeader(t * testing.T) {
 		
 	raftFollwer.acceptLogsFromLeader(&raftLeaderLogs, 1)
 	assert.Equal(len(raftFollwer.logs), 6)
-	assert.Equal(raftFollwer.logs[1].Command, "Leader Write X -> 1")
-	assert.Equal(raftFollwer.logs[2].Command, "Leader Write X -> 2")
-	assert.Equal(raftFollwer.logs[3].Command, "Leader Write X -> 3")
+	assert.Equal(raftFollwer.logs[1].Command, "Write X -> 1")
+	assert.Equal(raftFollwer.logs[2].Command, "Write X -> 2")
+	assert.Equal(raftFollwer.logs[3].Command, "Write X -> 3")
 	assert.Equal(raftFollwer.logs[4].Command, "Leader Write X -> 4")
 	assert.Equal(raftFollwer.logs[5].Command, "Leader Write X -> 5")
 }

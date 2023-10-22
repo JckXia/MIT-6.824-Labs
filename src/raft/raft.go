@@ -212,13 +212,12 @@ func (rf *Raft) getLeaderLogs(startLogIdx int) []Log {
 func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) {
 	logsFromLeader := *leaderLogs
 	startIdx := 0
-
- 
-
+	
 	for hostLogIdxStart := startLogIdx; hostLogIdxStart < len(rf.logs); hostLogIdxStart++ {
 		// Logs with conflicting term found!
 		if startIdx < len(logsFromLeader) && rf.logs[hostLogIdxStart].CommandTerm != logsFromLeader[startIdx].CommandTerm {
 			rf.logs = rf.logs[:hostLogIdxStart]
+			rf.logs = append(rf.logs, logsFromLeader[startIdx])
 		}
 		startIdx++
 	}
@@ -711,7 +710,7 @@ func (rf * Raft) bootStrapState(hostServerId int) {
 	rf.votedFor = HAS_NOT_VOTED
 	rf.leaderId = HAS_NOT_VOTED
 	// Raft logs start at 1 and not 0. Stub out a log
-	rf.AppendNewLog(Log{true, "ok", 0})
+	rf.AppendNewLog(Log{true, "Stub", 0})
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 
