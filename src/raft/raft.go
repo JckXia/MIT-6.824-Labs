@@ -210,17 +210,27 @@ func (rf *Raft) getLeaderLogs(startLogIdx int) []Log {
 
 // Converge logs from leader
 func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) {
-	logs := *leaderLogs
+	logsFromLeader := *leaderLogs
+	startIdx := 0
 
-	if startLogIdx >= len(rf.logs) {
-		DPrintf(LOG_LEVEL_WARN, "Warning! attempting to delete log out of bound %d", startLogIdx)
+ 
+
+	for hostLogIdxStart := startLogIdx; hostLogIdxStart < len(rf.logs); hostLogIdxStart++ {
+		// Logs with conflicting term found!
+		if startIdx < len(logsFromLeader) && rf.logs[hostLogIdxStart].CommandTerm != logsFromLeader[startIdx].CommandTerm {
+			rf.logs = rf.logs[:hostLogIdxStart]
+		}
+		startIdx++
 	}
 
-	rf.logs = rf.logs[:startLogIdx]
-	
-	for i :=0; i < len(logs); i++ {
-		// DebugPrintf("%s", logs[i].Command)
-		rf.logs = append(rf.logs, logs[i])
+	for ;startIdx < len(logsFromLeader); startIdx++ {
+		rf.logs = append(rf.logs, logsFromLeader[startIdx])
+	}
+}
+
+func (rf * Raft) printLogContent() {
+	for i := 0; i < len(rf.logs); i++ {
+		DPrintf(LOG_LEVEL_WARN, "Content: %s, Term: %d ", rf.logs[i].Command, rf.logs[i].CommandTerm)
 	}
 }
 
@@ -252,6 +262,7 @@ type AppendEntriesArgs struct {
 
 type AppendEntriesReply struct {
 	Term int
+	LogConsistent bool
 	Success bool
 }
 
@@ -307,6 +318,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Unlock()
 }
 
+
 func (rf * Raft) candidateLogIsUpToDate(candidateLastLogIndex int, candidateLastLogTerm int, candidateTerm int) (bool) {
 	hostLastLogTerm := rf.getLastLogTerm()
 	hostLastLogIdx := rf.getLastLogIdx()
@@ -338,6 +350,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	
 	check_result := rf.termCheck(candidate_term)
 	reply.Term  = rf.currentTerm
+	reply.LogConsistent = true
 
 	if check_result == false {
 		rf.leaderId = args.LeaderId
@@ -350,28 +363,34 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.lastContactWithPeer = time.Now()
 		rf.leaderId = args.LeaderId
 		reply.Success = false
-		
-		rf.deleteLogSuffix(args.PrevLogIndex)
-		for _, newLogEntry := range args.Entries {
-			rf.logs = append(rf.logs, newLogEntry)
-		}
-		
+		reply.LogConsistent = false
+		rf.acceptLogsFromLeader(&args.Entries, args.PrevLogIndex + 1);
 		if args.LeaderCommit > rf.commitIndex {
 			rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIdx())
 		}
 
+	} else if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == true {
+		rf.lastContactWithPeer = time.Now()
+		rf.leaderId = args.LeaderId
+		
+		reply.LogConsistent = true
+		reply.Success = true
 	} else {
 		rf.lastContactWithPeer = time.Now()
 		rf.leaderId = args.LeaderId
 		
 		reply.Success = true
+ 
 	}
  
 
 	rf.mu.Unlock()
 }
 
+// Implements step 2 of AppendEntries
+//	-> Semantics: If log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
 func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm int) bool {
+	 
 	if rf.getLastLogIdx() < leaderPrevLogIdx {
 		return false
 	}
@@ -379,6 +398,7 @@ func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm 
 	if rf.logs[leaderPrevLogIdx].CommandTerm != leaderPrevLogTerm {
 		return false	
 	}
+
 	return true
 }
 
@@ -432,35 +452,59 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	if rf.nodeStatus == Candidate && reply.VoteGranted == true{
 		rf.votesReceived++
 	}
-
-	// if rf.votesReceived > (len(rf.peers)/2) {
-	// 	rf.candidateTransitionToLeader()
-	// }
-	 
+ 	 
 	rf.lastContactWithPeer = time.Now()
 	rf.mu.Unlock()
 	
 	return ok
 }
 
+
+func (rf *Raft) scanNextIndex() {
+	leaderLastLogIdx := rf.getLastLogIdx()
+	for peerId := range rf.peers {
+		if leaderLastLogIdx >= rf.nextIndex[peerId] {
+			//go send
+			// go rf.sendAppendEntriesWithRetry(peerId, &rf.logs, rf.nextIndex[peerId])
+		}
+	}
+}
+
+// Idea:
+//	Make this a built-in mechanism for sending entries
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	for {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	if !ok {
 		DPrintf(LOG_LEVEL_ELECTION,"Servers %d is unreachable", server)
 		return ok
 	}
 	rf.mu.Lock()
-	 
-	rf.termCheck(reply.Term)
+	defer rf.mu.Unlock()
+
+	host_term := rf.currentTerm
+	if reply.Term > host_term {
+		DPrintf(LOG_LEVEL_ELECTION, "Server %d is no longer the leader ", rf.me)
+		rf.setStateToFollower(reply.Term)
+ 
+		return true;
+	}
  
 	if reply.Success == true {
 	   rf.lastContactWithPeer = time.Now()
-	}
- 
+	   rf.nextIndex[server] = rf.getLastLogIdx() + 1
+	   rf.matchIndex[server] = rf.getLastLogIdx()	
+	   return true	
+	} else {
+		
+		return false
+	} 
+		
 	rf.mu.Unlock()
-	return ok
+	}
+	return true
 }
-
+ 
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
@@ -492,7 +536,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.appendLogEntry(command)
 	index = rf.getLastLogIdx()
 	term = rf.getLastLogTerm()
- 
+	
+	// Use this as the opportunity to start replicating logs
+	rf.scanNextIndex()
 	return index, term, isLeader
 }
 
@@ -545,7 +591,6 @@ func (rf *Raft) lifeCycleManager() {
 		
 		if rf.nodeStatus == Candidate {
 			if rf.votesReceived > (len(rf.peers)/2) {
-	 
 				rf.candidateTransitionToLeader()
 			} else {
 				// Check for election timeouts
@@ -605,11 +650,9 @@ func (rf * Raft) candidateStartElection() {
 		}
 	}
 }
+ 
 
-// func (rf *Raft) candidateTransitionToFollower() {
-
-// }
-
+// What if we bundle up heart beat message with an actual AppendEntries RPC?
 func (rf * Raft) leaderSendHeartBeatMessages(leaderId int, leaderTerm int) {
 	// leaderTerm := rf.currentTerm
 	// leaderId := rf.me 
@@ -649,6 +692,7 @@ func (rf *Raft) setStateToFollower(peerTerm int) {
 	rf.votesReceived = 0 
 	rf.nodeStatus = Follower
 }
+
 //  Check Used for all RPC request/response
 //	 -> If discovered peer with higher term, set self
 //		to follower

@@ -89,16 +89,18 @@ func TestRaftOverwriteMiddleLogFromLeader(t *testing.T) {
 	assert.Equal(raftLeaderLogs[3].Command, "Leader Write X -> 5")
 
 	// raft follower log should look like
-	//	[S, F1,L2,L3,L4,L5]
+	//	[S, F1,L2,F3,L4,L5]
 	raftFollwer.acceptLogsFromLeader(&raftLeaderLogs, 2)
+ 
 	assert.Equal(len(raftFollwer.logs), 6)
 
-	assert.Equal(raftFollwer.logs[1].Command, "Write X -> 1")
-	assert.Equal(raftFollwer.logs[2].Command, "Leader Write X -> 2")
-	assert.Equal(raftFollwer.logs[3].Command, "Leader Write X -> 3")
+	 assert.Equal(raftFollwer.logs[1].Command, "Write X -> 1")
+	 assert.Equal(raftFollwer.logs[2].Command, "Write X -> 2")
+	assert.Equal(raftFollwer.logs[3].Command, "Write X -> 3")
 	assert.Equal(raftFollwer.logs[4].Command, "Leader Write X -> 4")
 	assert.Equal(raftFollwer.logs[5].Command, "Leader Write X -> 5")
 }
+
 
 /**
 			0 	 1	2  3  4 5
@@ -166,6 +168,7 @@ func generateRaftLaderWithYLogs(t * testing.T, logCount int) (*Raft) {
 	for val :=1; val <= logCount; val++ {
 		logCommand := "Leader Write X -> " + strconv.Itoa(val)
 		raftInstance.appendLogEntry(logCommand)
+		raftInstance.currentTerm++
 	}
 
 	return raftInstance
@@ -179,6 +182,7 @@ func generateRaftWithXLogs(t *testing.T, logCount int) (*Raft) {
 	for val :=1; val <= logCount; val++ {
 		logCommand := "Write X -> " + strconv.Itoa(val)
 		raftInstance.appendLogEntry(logCommand)
+		raftInstance.currentTerm++
 	} 
 
 	return raftInstance
