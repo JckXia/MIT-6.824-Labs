@@ -381,10 +381,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.leaderId = args.LeaderId
 		
 		reply.Success = true
- 
 	}
  
-
 	rf.mu.Unlock()
 }
 
@@ -466,7 +464,11 @@ func (rf *Raft) scanNextIndex() {
 	for peerId := range rf.peers {
 		if leaderLastLogIdx >= rf.nextIndex[peerId] {
 			//go send
-			// go rf.sendAppendEntriesWithRetry(peerId, &rf.logs, rf.nextIndex[peerId])
+			prevLogIdx := rf.nextIndex[peerId] - 1
+			prevLogTerm := rf.logs[prevLogIdx].CommandTerm
+			entries := rf.getLeaderLogs(rf.nextIndex[peerId])
+			initalAppendEntryRPC := AppendEntriesArgs{rf.currentTerm, rf.me, prevLogIdx, prevLogTerm, entries, rf.commitIndex}
+			go rf.sendAppendEntries(peerId, &initalAppendEntryRPC, &AppendEntriesReply{})
 		}
 	}
 }
@@ -494,21 +496,38 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	if reply.Success == true {
 	   rf.lastContactWithPeer = time.Now()
 	   rf.nextIndex[server] = rf.getLastLogIdx() + 1
-	   rf.matchIndex[server] = rf.getLastLogIdx()	
+	   rf.matchIndex[server] = rf.getLastLogIdx()
+	
+	   for N := rf.commitIndex + 1; N <= rf.getLastLogIdx(); N++ {
+			serverReplicatedCount := 0
+			for peerId := range rf.peers {
+				if rf.matchIndex[peerId] >= N {
+					serverReplicatedCount++
+				}
+				if serverReplicatedCount > (len(rf.peers)/2) {
+					if rf.logs[N].CommandTerm == rf.currentTerm {
+						rf.commitIndex = N
+					}
+				}
+			}
+	   }
+
 	   return true	
-	} else if reply.LogConsistent == false {
+	} else if reply.LogConsistent == false && rf.nodeStatus == Leader {
 		DPrintf(LOG_LEVEL_REPLICATION, "Leader (%d) has log inconsit with Peer %d ", rf.me, server)
 		rf.nextIndex[server]--
 		
-		args.PrevLogIndex = rf.nextIndex[server]-1
+		args.PrevLogIndex = rf.nextIndex[server] - 1
 		args.PrevLogTerm = rf.logs[args.PrevLogIndex].CommandTerm
 		
 	} else {
-		
+		// replied failed either
+		//	-> reply.Success = false, failed due to server aggrements
 		return false
 	} 
 		
 	rf.mu.Unlock()
+	time.Sleep(2* time.Millisecond)
 	}
 	return true
 }
