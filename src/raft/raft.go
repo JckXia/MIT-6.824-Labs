@@ -229,7 +229,7 @@ func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) {
 
 func (rf * Raft) printLogContent() {
 	for i := 0; i < len(rf.logs); i++ {
-		DPrintf(LOG_LEVEL_WARN, "Content: %s, Term: %d ", rf.logs[i].Command, rf.logs[i].CommandTerm)
+		DPrintf(LOG_LEVEL_WARN, "Host: %d Content: %s, Term: %d ", rf.me, rf.logs[i].Command, rf.logs[i].CommandTerm)
 	}
 }
 
@@ -359,12 +359,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 
 	} else if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == false {
+		DPrintf(LOG_LEVEL_REPLICATION, "Host %d does not contain log %d from leader %d", rf.me, args.PrevLogIndex, args.LeaderId)
 		rf.lastContactWithPeer = time.Now()
 		rf.leaderId = args.LeaderId
 		reply.Success = false
 		reply.LogConsistent = false
 
 	} else if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == true {
+	//	DPrintf(LOG_LEVEL_REPLICATION, "Host %d contain log %d from leader %d", rf.me, args.PrevLogIndex, args.LeaderId)
 		rf.lastContactWithPeer = time.Now()
 		rf.leaderId = args.LeaderId
 		
@@ -372,8 +374,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Success = true
 
 		rf.acceptLogsFromLeader(&args.Entries, args.PrevLogIndex + 1)
+		//rf.printLogContent()
+		DPrintf(LOG_LEVEL_REPLICATION,"(Host %d) Leader commit index %d log len %d", rf.me, args.LeaderCommit, len(args.Entries))
 		if args.LeaderCommit > rf.commitIndex {
+		 
 			rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIdx())
+			// DPrintf(LOG_LEVEL_REPLICATION, "Update host commit index to %d ", rf.commitIndex)
 		}
 
 	} else {
@@ -462,7 +468,8 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 func (rf *Raft) scanNextIndex() {
 	leaderLastLogIdx := rf.getLastLogIdx()
 	for peerId := range rf.peers {
-		if leaderLastLogIdx >= rf.nextIndex[peerId] {
+		if peerId != rf.me && leaderLastLogIdx >= rf.nextIndex[peerId] {
+			DPrintf(LOG_LEVEL_REPLICATION, "Leader %d sending log to peer %d", rf.me, peerId )
 			//go send
 			prevLogIdx := rf.nextIndex[peerId] - 1
 			prevLogTerm := rf.logs[prevLogIdx].CommandTerm
@@ -494,19 +501,24 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	}
  
 	if reply.Success == true {
+ 
 	   rf.lastContactWithPeer = time.Now()
 	   rf.nextIndex[server] = rf.getLastLogIdx() + 1
 	   rf.matchIndex[server] = rf.getLastLogIdx()
-	
+	  //DPrintf(LOG_LEVEL_REPLICATION,"Match value peer %d match up to  %d", server, rf.matchIndex[server])
 	   for N := rf.commitIndex + 1; N <= rf.getLastLogIdx(); N++ {
+	 
 			serverReplicatedCount := 0
 			for peerId := range rf.peers {
 				if rf.matchIndex[peerId] >= N {
 					serverReplicatedCount++
 				}
+			 
 				if serverReplicatedCount > (len(rf.peers)/2) {
+ 
 					if rf.logs[N].CommandTerm == rf.currentTerm {
 						rf.commitIndex = N
+						DPrintf(LOG_LEVEL_REPLICATION, "Leader Set commit index to %d", N)
 					}
 				}
 			}
@@ -563,7 +575,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.appendLogEntry(command)
 	index = rf.getLastLogIdx()
 	term = rf.getLastLogTerm()
-	
+	DPrintf(LOG_LEVEL_REPLICATION,"Append command %s", command)
 	// Use this as the opportunity to start replicating logs
 	rf.scanNextIndex()
 	return index, term, isLeader
@@ -596,11 +608,12 @@ func (rf *Raft) lifeCycleManager() {
 	for rf.killed() == false {
 
 		rf.mu.Lock()
-		
+		 	
 		if rf.commitIndex > rf.lastApplied {
 			rf.lastApplied++
 			logEntryToCommit := rf.logs[rf.lastApplied]
 			applyMsg := ApplyMsg{true, logEntryToCommit.Command, rf.lastApplied, true,nil, 0,0}
+			DPrintf(LOG_LEVEL_REPLICATION,"Server %d applying log at %d", rf.me, rf.lastApplied)	
 			rf.applyCh <- applyMsg
 		}
 
@@ -685,10 +698,13 @@ func (rf * Raft) leaderSendHeartBeatMessages(leaderId int, leaderTerm int) {
 	// leaderId := rf.me 
 
 	emptyEntries := make([]Log,0)
-	appendEntriesArgs := AppendEntriesArgs{leaderTerm, leaderId, 0,0, emptyEntries, 0}
+	//appendEntriesArgs := AppendEntriesArgs{leaderTerm, leaderId, 0,0, emptyEntries, 0}
 
 	for peerId := range rf.peers {
 		if peerId != leaderId {
+			prevLogIdx := rf.nextIndex[peerId] - 1
+			prevLogTerm := rf.logs[prevLogIdx].CommandTerm
+			appendEntriesArgs := AppendEntriesArgs{leaderTerm, leaderId, prevLogIdx, prevLogTerm, emptyEntries, rf.commitIndex}
 			go rf.sendAppendEntries(peerId, &appendEntriesArgs, &AppendEntriesReply{})
 		}
 	}
