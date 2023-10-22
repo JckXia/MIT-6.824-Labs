@@ -212,7 +212,7 @@ func (rf *Raft) getLeaderLogs(startLogIdx int) []Log {
 func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) {
 	logsFromLeader := *leaderLogs
 	startIdx := 0
-	
+
 	for hostLogIdxStart := startLogIdx; hostLogIdxStart < len(rf.logs); hostLogIdxStart++ {
 		// Logs with conflicting term found!
 		if startIdx < len(logsFromLeader) && rf.logs[hostLogIdxStart].CommandTerm != logsFromLeader[startIdx].CommandTerm {
@@ -363,10 +363,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.leaderId = args.LeaderId
 		reply.Success = false
 		reply.LogConsistent = false
-		rf.acceptLogsFromLeader(&args.Entries, args.PrevLogIndex + 1);
-		if args.LeaderCommit > rf.commitIndex {
-			rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIdx())
-		}
 
 	} else if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == true {
 		rf.lastContactWithPeer = time.Now()
@@ -374,6 +370,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		
 		reply.LogConsistent = true
 		reply.Success = true
+
+		rf.acceptLogsFromLeader(&args.Entries, args.PrevLogIndex + 1)
+		if args.LeaderCommit > rf.commitIndex {
+			rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIdx())
+		}
+
 	} else {
 		rf.lastContactWithPeer = time.Now()
 		rf.leaderId = args.LeaderId
@@ -485,7 +487,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	if reply.Term > host_term {
 		DPrintf(LOG_LEVEL_ELECTION, "Server %d is no longer the leader ", rf.me)
 		rf.setStateToFollower(reply.Term)
- 
+
 		return true;
 	}
  
@@ -494,6 +496,13 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	   rf.nextIndex[server] = rf.getLastLogIdx() + 1
 	   rf.matchIndex[server] = rf.getLastLogIdx()	
 	   return true	
+	} else if reply.LogConsistent == false {
+		DPrintf(LOG_LEVEL_REPLICATION, "Leader (%d) has log inconsit with Peer %d ", rf.me, server)
+		rf.nextIndex[server]--
+		
+		args.PrevLogIndex = rf.nextIndex[server]-1
+		args.PrevLogTerm = rf.logs[args.PrevLogIndex].CommandTerm
+		
 	} else {
 		
 		return false
