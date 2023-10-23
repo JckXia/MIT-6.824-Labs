@@ -204,6 +204,28 @@ func TestRaftOverwriteFirstLogFromLeader(t * testing.T) {
 	assert.Equal(raftFollwer.logs[5].Command, "Leader Write X -> 5")
 }
 
+func TestRaftAcceptLogFromLeaderThrow(t * testing.T) {
+	raftLeader := generateRaftLaderWithYLogs(t,0)
+	raftFollwer := generateRaftWithXLogs(t,0)
+
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 1",4})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 2",6})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 3",6})	
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 4",6})
+
+	raftFollwer.logs = append(raftFollwer.logs, Log{true, "Write X -> 1",4})
+	raftFollwer.logs = append(raftFollwer.logs, Log{true, "Write X -> 2",4})
+	raftFollwer.logs = append(raftFollwer.logs, Log{true, "Write X -> 3",4})
+ 
+
+	leaderLogs := raftLeader.getLeaderLogs(1)
+	
+	raftFollwer.acceptLogsFromLeader(&leaderLogs, 1)
+	//raftFollwer.printLogContent()
+ 
+	
+}
+
 func generateRaftLaderWithYLogs(t * testing.T, logCount int) (*Raft) {
 	cfg := make_config(t,1, false,false)
 	raftInstance := cfg.rafts[0]
