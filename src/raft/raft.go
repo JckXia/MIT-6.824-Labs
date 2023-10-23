@@ -407,6 +407,13 @@ func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm 
 	return true
 }
 
+
+// TODO:
+//	-> Implement a binary search in logs to find first entry containing the term
+func (rf *Raft) lookupFirstEntryWithTerm(xTerm int) {
+
+}
+
 // What if we design an exponeial backoff wrt number of failed tries?
 func (rf *Raft) getNewElectionTimeout() int {
 	return RandRange(230,400)
