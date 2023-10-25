@@ -217,9 +217,14 @@ func TestRaftReturnFirstEntryWithTerm(t * testing.T) {
 	assert.Equal(idx, 3)
 	assert.Equal(raftLeader.logs[idx].Command, "Leader Write X -> 3")
 
+	idx = raftLeader.lookupFirstEntryWithTerm(2)
+	assert.Equal(idx,2)
+
 	raftFollwer := generateRaftWithXLogs(t,0)
 	idx = raftFollwer.lookupFirstEntryWithTerm(4)
 	assert.Equal(idx, -1)
+
+
 
 }	
 

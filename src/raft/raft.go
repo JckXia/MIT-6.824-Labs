@@ -18,14 +18,14 @@ package raft
 //
 
 import (
-//	"bytes"
+	"bytes"
 	"sync"
 	"time"
  
 	"sync/atomic"
 	//"util"
 	// "fmt"
-//	"6.824/labgob"
+	"6.824/labgob"
 	"6.824/labrpc"
 )
 var HAS_NOT_VOTED int= -1
@@ -125,8 +125,15 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
+	 w := new(bytes.Buffer)
+	 e := labgob.NewEncoder(w)
+
+ 
+	 e.Encode(rf.votedFor)
+	 e.Encode(rf.currentTerm)
+	 e.Encode(rf.logs)
+	 data := w.Bytes()
+	 rf.persister.SaveRaftState(data)
 	// e.Encode(rf.xxx)
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
@@ -143,17 +150,22 @@ func (rf *Raft) readPersist(data []byte) {
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	 r := bytes.NewBuffer(data)
+	 d := labgob.NewDecoder(r)
+	 
+	 var votedFor int 
+	 var currentTerm int
+	 var raftLogs []Log
+	 if d.Decode(&votedFor) != nil || 
+	 	d.Decode(&currentTerm) != nil ||
+		d.Decode(&raftLogs) != nil {
+		
+		DebugPrintf(LOG_LEVEL_WARN,"Could not deserialize from data")
+	 } else {
+		rf.votedFor = votedFor
+		rf.currentTerm = currentTerm
+		rf.logs = raftLogs
+	 }
 }
 
 
@@ -427,16 +439,37 @@ func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm 
 // TODO:
 //	-> Rewrite this using binary search
 func (rf *Raft) lookupFirstEntryWithTerm(xTerm int) int {
-	for i:= 0; i< len(rf.logs); i++ {
-		if rf.logs[i].CommandTerm == xTerm {
-			return i
-		}
+
+	low := 0
+	high := len(rf.logs)-1
+
+	for low <= high {
+		pivot := (low + high) /2
+		if rf.logs[pivot].CommandTerm == xTerm && pivot > 1 && rf.logs[pivot-1].CommandTerm != xTerm {
+			return pivot
+		} 
+		if rf.logs[pivot].CommandTerm < xTerm {
+			low = pivot + 1
+		} else {
+			high = pivot - 1
+		} 
 	}
+
 	return -1
+
+	// // pivot := (0 + len(rf.logs)) / 2
+	// for i:= 0; i< len(rf.logs); i++ {
+	// 	if rf.logs[i].CommandTerm == xTerm {
+	// 		return i
+	// 	}
+	// }
+	// return -1
 }
 
 // Reserved for leader
 func (rf * Raft) lookupLastEntryWithTerm(xTerm int) int {
+
+
 	for i := len(rf.logs) - 1; i >=0; i-- {
 		if rf.logs[i].CommandTerm == xTerm {
 			return i
@@ -583,9 +616,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 			// handles the case where follower's log is too short
 			rf.nextIndex[server] = reply.Xlen
 		}
- 
-		//rf.nextIndex[server]--
-		
+ 		
 		args.PrevLogIndex = rf.nextIndex[server] - 1
 		args.PrevLogTerm = rf.logs[args.PrevLogIndex].CommandTerm
 		args.Entries = rf.getLeaderLogs(rf.nextIndex[server])
