@@ -204,6 +204,25 @@ func TestRaftOverwriteFirstLogFromLeader(t * testing.T) {
 	assert.Equal(raftFollwer.logs[5].Command, "Leader Write X -> 5")
 }
 
+func TestRaftReturnFirstEntryWithTerm(t * testing.T) {
+	raftLeader := generateRaftLaderWithYLogs(t,0)
+	assert := assert.New(t)
+
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 1",1})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 2",2})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 3",3})	
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 4",3})
+
+	idx := raftLeader.lookupFirstEntryWithTerm(3)
+	assert.Equal(idx, 3)
+	assert.Equal(raftLeader.logs[idx].Command, "Leader Write X -> 3")
+
+	raftFollwer := generateRaftWithXLogs(t,0)
+	idx = raftFollwer.lookupFirstEntryWithTerm(4)
+	assert.Equal(idx, -1)
+
+}	
+
 func TestRaftAcceptLogFromLeaderThrow(t * testing.T) {
 	raftLeader := generateRaftLaderWithYLogs(t,0)
 	raftFollwer := generateRaftWithXLogs(t,0)

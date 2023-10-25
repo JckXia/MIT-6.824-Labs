@@ -263,6 +263,11 @@ type AppendEntriesReply struct {
 	Term int
 	LogConsistent bool
 	Success bool
+
+	// Optimization
+	Xterm int
+	XIndex int 
+	Xlen int
 }
 
 //
@@ -350,6 +355,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	check_result := rf.termCheck(candidate_term)
 	reply.Term  = rf.currentTerm
 	reply.LogConsistent = true
+	reply.Xterm = -1
+	reply.XIndex = -1
+	reply.Xlen = -1
 
 	if check_result == false {
 		rf.leaderId = args.LeaderId
@@ -365,6 +373,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Success = false
 		reply.LogConsistent = false
 
+		// log is too short. 
+		if rf.getLastLogIdx() < args.PrevLogIndex {
+			reply.Xlen = len(rf.logs)
+		} else {
+			conflict_term := rf.logs[args.PrevLogIndex].CommandTerm
+			first_idx_with_conflict := rf.lookupFirstEntryWithTerm(conflict_term)
+
+			reply.Xterm = conflict_term
+			reply.XIndex = first_idx_with_conflict
+		}
+
 	} else if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == true {
 	//	DPrintf(LOG_LEVEL_REPLICATION, "Host %d contain log %d from leader %d", rf.me, args.PrevLogIndex, args.LeaderId)
 		rf.lastContactWithPeer = time.Now()
@@ -374,12 +393,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.Success = true
 
 		rf.acceptLogsFromLeader(&args.Entries, args.PrevLogIndex + 1)
-		//rf.printLogContent() 
-		// DPrintf(LOG_LEVEL_REPLICATION,"(Host %d, Commit idx: %d) Leader commit index %d log len %d", rf.me, rf.commitIndex, args.LeaderCommit, len(args.Entries))
+ 
 		if args.LeaderCommit > rf.commitIndex {
-		 
 			rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIdx())
-			// DPrintf(LOG_LEVEL_REPLICATION, "Update host commit index to %d ", rf.commitIndex)
 		}
 
 	} else {
@@ -409,9 +425,24 @@ func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm 
 
 
 // TODO:
-//	-> Implement a binary search in logs to find first entry containing the term
-func (rf *Raft) lookupFirstEntryWithTerm(xTerm int) {
+//	-> Rewrite this using binary search
+func (rf *Raft) lookupFirstEntryWithTerm(xTerm int) int {
+	for i:= 0; i< len(rf.logs); i++ {
+		if rf.logs[i].CommandTerm == xTerm {
+			return i
+		}
+	}
+	return -1
+}
 
+// Reserved for leader
+func (rf * Raft) lookupLastEntryWithTerm(xTerm int) int {
+	for i := len(rf.logs) - 1; i >=0; i-- {
+		if rf.logs[i].CommandTerm == xTerm {
+			return i
+		}
+	}
+	return -1
 }
 
 // What if we design an exponeial backoff wrt number of failed tries?
@@ -535,12 +566,31 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	   return true	
 	} else if reply.LogConsistent == false && rf.nodeStatus == Leader {
 	//	DPrintf(LOG_LEVEL_WARN, "Retrying happened~! %d ", args.PrevLogIndex)
-		rf.nextIndex[server]--
+
+		if reply.Xterm != -1 {
+			// handles the first two cases
+			lookupIdx := rf.lookupLastEntryWithTerm(reply.Xterm)
+			
+			if lookupIdx == -1 {
+				// Leader does not have xTerm
+				rf.nextIndex[server] = reply.XIndex
+			} else {
+				// Leader have xTerm
+				rf.nextIndex[server] = lookupIdx
+			}
+
+		} else if reply.Xlen != -1 {
+			// handles the case where follower's log is too short
+			rf.nextIndex[server] = reply.Xlen
+		}
+ 
+		//rf.nextIndex[server]--
 		
 		args.PrevLogIndex = rf.nextIndex[server] - 1
 		args.PrevLogTerm = rf.logs[args.PrevLogIndex].CommandTerm
 		args.Entries = rf.getLeaderLogs(rf.nextIndex[server])
 		rf.mu.Unlock()
+		
 	} else {
 		// replied failed either
 		//	-> reply.Success = false, failed due to server aggrements
