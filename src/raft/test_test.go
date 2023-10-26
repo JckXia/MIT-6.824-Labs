@@ -597,6 +597,7 @@ func TestPersist12C(t *testing.T) {
 	for i := 0; i < servers; i++ {
 		cfg.start1(i, cfg.applier)
 	}
+	
 	for i := 0; i < servers; i++ {
 		cfg.disconnect(i)
 		cfg.connect(i)
@@ -617,6 +618,7 @@ func TestPersist12C(t *testing.T) {
 	cfg.start1(leader2, cfg.applier)
 	cfg.connect(leader2)
 
+	DPrintf(LOG_LEVEL_PERSISTENCE,"Waiting on leader2 %d", leader2)
 	cfg.wait(4, servers, -1) // wait for leader2 to join before killing i3
 
 	i3 := (cfg.checkOneLeader() + 1) % servers
@@ -800,21 +802,28 @@ func TestUnreliableAgree2C(t *testing.T) {
 
 	cfg.end()
 }
-
+/**		
+	5 server cluster
+**/
 func TestFigure8Unreliable2C(t *testing.T) {
+	// Initially, there are 5 servers
 	servers := 5
 	cfg := make_config(t, servers, true, false)
 	defer cfg.cleanup()
 
 	cfg.begin("Test (2C): Figure 8 (unreliable)")
 
+	// start off by consuming a single log
 	cfg.one(rand.Int()%10000, 1, true)
-
+	
+	// nup means number of servers up (i think)
 	nup := servers
 	for iters := 0; iters < 1000; iters++ {
 		if iters == 200 {
 			cfg.setlongreordering(true)
 		}
+
+		// Find the "leader"
 		leader := -1
 		for i := 0; i < servers; i++ {
 			_, _, ok := cfg.rafts[i].Start(rand.Int() % 10000)
@@ -822,7 +831,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 				leader = i
 			}
 		}
-
+		
 		if (rand.Int() % 1000) < 100 {
 			ms := rand.Int63() % (int64(RaftElectionTimeout/time.Millisecond) / 2)
 			time.Sleep(time.Duration(ms) * time.Millisecond)
@@ -838,7 +847,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 
 		if nup < 3 {
 			s := rand.Int() % servers
-			if cfg.connected[s] == false {
+			if cfg.connected[s] == false {				 
 				cfg.connect(s)
 				nup += 1
 			}

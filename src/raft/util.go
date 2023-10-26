@@ -12,7 +12,7 @@ const Debug = false
  
 func DPrintf(debugLevels string, format string, a ...interface{}) (n int, err error) {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	if Debug && debugLevels == LOG_LEVEL_REPLICATION {
+	if Debug && (debugLevels == LOG_LEVEL_PERSISTENCE ) {
 		log.Printf(format, a...)
 	}
 

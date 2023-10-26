@@ -31,13 +31,12 @@ func TestRaftLogPersistMultiLog(t *testing.T) {
 	raftInstance.votedFor = 2
 	raftInstance.currentTerm = 3
 	raftInstance.persist()
-
+ 
 	assert.Equal(len(raftInstance.logs), 4+1)
 
 	raftState := raftInstance.persister.ReadRaftState()
 	raftInstance.readPersist(raftState)
 
- 
 	
 	assert.Equal(raftInstance.votedFor, 2)
 	assert.Equal(raftInstance.currentTerm,3)
