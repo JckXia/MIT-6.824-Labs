@@ -223,13 +223,16 @@ func (rf *Raft) getLeaderLogs(startLogIdx int) []Log {
 		DPrintf(LOG_LEVEL_WARN, "Warning! attempting to retrieve log out of bound at idx: %d", startLogIdx)
 	}
 	logsToReturn := rf.logs[startLogIdx:]
-	// for i :=0; i <len(logsToReturn); i++ {
-	// 	if logsToReturn[i].CommandTerm < rf.currentTerm {
-	// 		logsToReturn[i].IsNoOp = true	
-	// 	}
-	// }
 
-	return logsToReturn
+	newLogs := make([]Log, len(logsToReturn))
+	
+	for i :=0; i <len(logsToReturn); i++ {
+		newLogs[i].CommandTerm = logsToReturn[i].CommandTerm
+		newLogs[i].Command = logsToReturn[i].Command 
+		newLogs[i].CommandValid = logsToReturn[i].CommandValid
+	}
+
+	return newLogs
 }
 
 // Converge logs from leader
@@ -596,7 +599,7 @@ func (rf * Raft) lookForMatchIndex() {
 		rf.mu.Unlock()
  
 		
-		time.Sleep(2* time.Millisecond)
+		time.Sleep(20* time.Millisecond)
 	}
 }
 // Idea:
@@ -849,11 +852,11 @@ func (rf * Raft) LeaderHeartBeatManager() {
 		leaderTerm := rf.currentTerm
 
 		if rf.nodeStatus == Leader {
-			go rf.leaderSendHeartBeatMessages(leaderId, leaderTerm, &rf.nextIndex,&rf.logs)
+			rf.leaderSendHeartBeatMessages(leaderId, leaderTerm, &rf.nextIndex,&rf.logs)
 		}
 		rf.mu.Unlock()
 
-		time.Sleep(180 * time.Millisecond)
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 
