@@ -137,8 +137,8 @@ func (rf *Raft) persist() {
 	 data := w.Bytes()
 	 rf.persister.SaveRaftState(data)
 	 
-	 DPrintf(LOG_LEVEL_PERSISTENCE,"(Leader %d) Host %d persist state: (votedFor: %d, currentTerm: %d, lastLogIdx: %d, lastLogTerm %d)",rf.leaderId, rf.me, rf.votedFor, rf.currentTerm, rf.getLastLogIdx(), rf.getLastLogTerm())
- 
+	 //DPrintf(LOG_LEVEL_PERSISTENCE,"(Leader %d) Host %d persist state: (votedFor: %d, currentTerm: %d, lastLogIdx: %d, lastLogTerm %d)",rf.leaderId, rf.me, rf.votedFor, rf.currentTerm, rf.getLastLogIdx(), rf.getLastLogTerm())
+	 DebugP(dPersist, "S%d,V:%d,CT:%d,logs:[%s]", rf.me, rf.votedFor, rf.currentTerm, serializeLogContents(rf.logs))
 }
 
 
@@ -185,7 +185,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 
 // ************************* LOG OPERATIONS ***************// 
 func (rf *Raft) appendLogEntry(command interface{}){
-	newLog := Log{true, command, rf.currentTerm, false}
+	newLog := Log{true, command, rf.currentTerm}
 	rf.logs = append(rf.logs, newLog)
 	rf.persist()
 }
@@ -276,7 +276,6 @@ type Log struct {
 	CommandValid bool
 	Command interface{}
 	CommandTerm int 
-	IsNoOp bool
 }
 
 type AppendEntriesArgs struct {
@@ -462,25 +461,6 @@ func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm 
 // TODO:
 //	-> Rewrite this using binary search
 func (rf *Raft) lookupFirstEntryWithTerm(xTerm int) int {
-
-	// low := 0
-	// high := len(rf.logs)-1
-
-	// for low <= high {
-	// 	pivot := (low + high) /2
-	// 	if rf.logs[pivot].CommandTerm == xTerm && pivot > 1 && rf.logs[pivot-1].CommandTerm != xTerm {
-	// 		return pivot
-	// 	} 
-	// 	if rf.logs[pivot].CommandTerm < xTerm {
-	// 		low = pivot + 1
-	// 	} else {
-	// 		high = pivot - 1
-	// 	} 
-	// }
-
-	// return -1
-
-	// // pivot := (0 + len(rf.logs)) / 2
 	for i:= 0; i< len(rf.logs); i++ {
 		if rf.logs[i].CommandTerm == xTerm {
 			return i
@@ -635,25 +615,11 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 	if reply.Success == true {
  
-	   rf.lastContactWithPeer = time.Now()
-	//    rf.matchIndex[server] = args.PrevLogIndex + len(args.Entries)
-	//    rf.nextIndex[server] = rf.matchIndex[server] + 1
+		rf.lastContactWithPeer = time.Now()
+ 	   
+		newMatchIndex := args.PrevLogIndex + len(args.Entries) 
 
-	//    a := args.PrevLogIndex + len(args.Entries)
-	//    b := rf.getLastLogIdx()
-	//    if a != b {
-	// 	 //DPrintf(LOG_LEVEL_WARN,"New change %d old change %d, argsPrevLogIndex %d, logLen %d, peer %d", a,b, args.PrevLogIndex, len(args.Entries), server)
-	// 	// rf.printLogContent()
-	// 	 DebugPrintf("Diff found %d %d", a,b)
-	// 	}
-
-	   
-		 newMatchIndex := args.PrevLogIndex + len(args.Entries) 
-
-		if newMatchIndex > rf.matchIndex[server] {
-			rf.matchIndex[server] = newMatchIndex
-		}
-		// rf.matchIndex[server] = newMatchIndex
+		rf.matchIndex[server] = newMatchIndex
 		rf.nextIndex[server] = rf.matchIndex[server] + 1
 	//DebugPrintf("Leader %d to host %d, (nextIndex %d, matchIndex %d) log len %d ", rf.me, server, rf.nextIndex[server], rf.matchIndex[server], len(args.Entries))
 	   
@@ -753,7 +719,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term = rf.getLastLogTerm()
 	DPrintf(LOG_LEVEL_REPLICATION,"Append command %s", command)
 	// Use this as the opportunity to start replicating logs
-	//rf.scanNextIndex()
+	rf.scanNextIndex()
 	return index, term, isLeader
 }
 
@@ -786,31 +752,14 @@ func (rf *Raft) lifeCycleManager() {
 		rf.mu.Lock()
 		 	
 		if rf.commitIndex > rf.lastApplied {
-			// rf.lastApplied++
-			// logEntryToCommit := rf.logs[rf.lastApplied]
-			// applyMsg := ApplyMsg{true, logEntryToCommit.Command, rf.lastApplied, true,nil, 0,0}
-			// DPrintf(LOG_LEVEL_PERSISTENCE,"(Leader %d )Server %d applying log (term %d) at term %d, idx %d", rf.leaderId, rf.me, logEntryToCommit.CommandTerm,  rf.currentTerm, rf.lastApplied)	
-			// if logEntryToCommit.IsNoOp == false {
-			// 	rf.applyCh <- applyMsg
-			// }
 			
 			for rf.lastApplied < rf.commitIndex {
 				rf.lastApplied++
 				logEntryToCommit := rf.logs[rf.lastApplied]
-				applyMsg := ApplyMsg{true, logEntryToCommit.Command, rf.lastApplied, true,nil, 0,0}
-				DPrintf(LOG_LEVEL_PERSISTENCE,"(Leader %d )Server %d applying log (data: %s, term %d) at term %d, idx %d", rf.leaderId, rf.me, logEntryToCommit.Command, logEntryToCommit.CommandTerm,  rf.currentTerm, rf.lastApplied)	
-				if logEntryToCommit.IsNoOp == false  {
-					rf.applyCh <- applyMsg
-				}
-
-			}
-			// for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-			// 	logEntryToCommit := rf.logs[i]
-			// 	applyMsg := ApplyMsg{true, logEntryToCommit.Command, rf.lastApplied, true,nil, 0,0}
-			// 	rf.applyCh <- applyMsg
-			// 	rf.lastApplied = i
-			// }
-			//rf.applyCh <- applyMsg
+				applyMsg := ApplyMsg{true, logEntryToCommit.Command, rf.lastApplied, true,nil, 0,0}	
+				DebugP(dCommit, "S%d applying log (%s) at term %d, CI %d, isLeader: %v", rf.me, serializeLog(logEntryToCommit) , rf.currentTerm, rf.lastApplied, rf.nodeStatus == Leader)
+				rf.applyCh <- applyMsg
+			} 
 		}
 
 		now := time.Now()
@@ -850,7 +799,7 @@ func (rf * Raft) LeaderHeartBeatManager() {
 		rf.mu.Lock()
 		leaderId := rf.me 
 		leaderTerm := rf.currentTerm
-
+		
 		if rf.nodeStatus == Leader {
 			rf.leaderSendHeartBeatMessages(leaderId, leaderTerm, &rf.nextIndex,&rf.logs)
 		}
@@ -864,8 +813,7 @@ func (rf * Raft) LeaderHeartBeatManager() {
 func (rf * Raft) followerTransitionToCandidate() {
 	
 	rf.nodeStatus = Candidate
-	DPrintf(LOG_LEVEL_ELECTION,"Server id %d became candidate for term %d ", rf.me, rf.currentTerm)
-
+	DebugP(dElection, "S%d became candidate for term %d", rf.me, rf.currentTerm)
 	rf.candidateStartElection()
 }
 
@@ -878,11 +826,12 @@ func (rf * Raft) candidateStartElection() {
 	rf.lastContactWithPeer = time.Now()
 	rf.electionTimeout = rf.getNewElectionTimeout()
 	rf.persist()
+	DebugP(dElection,"C%d increments currentTerm to %d", rf.me, rf.currentTerm)
+	
 	requestVoteArgs := RequestVoteArgs{rf.currentTerm, rf.me, rf.getLastLogIdx(), rf.getLastLogTerm()} 
-	DPrintf(LOG_LEVEL_ELECTION,"Candidate id %d is starting an election for term %d ", rf.me, rf.currentTerm)
-
 	for peerId := range rf.peers {
 		if peerId != rf.me {
+			DebugP(dElection, "C%d request vote from %d at term: %d", rf.me, peerId, rf.currentTerm)
 			go rf.sendRequestVote(peerId,&requestVoteArgs, &RequestVoteReply{})
 		}
 	}
@@ -891,19 +840,17 @@ func (rf * Raft) candidateStartElection() {
 
 // What if we bundle up heart beat message with an actual AppendEntries RPC?
 func (rf * Raft) leaderSendHeartBeatMessages(leaderId int, leaderTerm int, nextIndex *map[int]int, logs *[]Log) {
-	// leaderTerm := rf.currentTerm
-	// leaderId := rf.me 
 
 	emptyEntries := make([]Log,0)
-	//appendEntriesArgs := AppendEntriesArgs{leaderTerm, leaderId, 0,0, emptyEntries, 0}
+ 
 	nextIndexArr := *nextIndex
 	logArr := *logs
+	DebugP(dElection,"L%d broadcast HB for term %d", rf.me, rf.currentTerm)
 	for peerId := range rf.peers {
 		if peerId != leaderId {
 			prevLogIdx := nextIndexArr[peerId] - 1
 			prevLogTerm := logArr[prevLogIdx].CommandTerm
 			appendEntriesArgs := AppendEntriesArgs{leaderTerm, leaderId, prevLogIdx, prevLogTerm, emptyEntries, rf.commitIndex}
-			DPrintf(LOG_LEVEL_PERSISTENCE,"Leader %d sending heart beat messages to %d, prevLogIdx %d", rf.me, peerId, prevLogIdx)
 			go rf.sendAppendEntries(peerId, &appendEntriesArgs, &AppendEntriesReply{})
 		}
 	}
@@ -923,7 +870,7 @@ func (rf * Raft) candidateTransitionToLeader() {
 			rf.matchIndex[peerId] = 0
 		}
 	}
-
+	 
 	rf.leaderSendHeartBeatMessages(rf.me, rf.currentTerm, &rf.nextIndex,&rf.logs)
 }
 
@@ -957,7 +904,7 @@ func (rf * Raft) bootStrapState(hostServerId int) {
 	rf.votedFor = HAS_NOT_VOTED
 	rf.leaderId = HAS_NOT_VOTED
 	// Raft logs start at 1 and not 0. Stub out a log
-	rf.AppendNewLog(Log{true, "Stub", 0, false})
+	rf.AppendNewLog(Log{true, "Stub", 0})
 	rf.commitIndex = 0
 	rf.lastApplied = 0
 
