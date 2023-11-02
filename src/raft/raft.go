@@ -137,7 +137,6 @@ func (rf *Raft) persist() {
 	 data := w.Bytes()
 	 rf.persister.SaveRaftState(data)
 	 
-	 //DPrintf(LOG_LEVEL_PERSISTENCE,"(Leader %d) Host %d persist state: (votedFor: %d, currentTerm: %d, lastLogIdx: %d, lastLogTerm %d)",rf.leaderId, rf.me, rf.votedFor, rf.currentTerm, rf.getLastLogIdx(), rf.getLastLogTerm())
 	 DebugP(dPersist, "S%d,V:%d,CT:%d,logs:[%s]", rf.me, rf.votedFor, rf.currentTerm, serializeLogContents(rf.logs))
 }
 
@@ -331,7 +330,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	host_term := rf.currentTerm  
 
 	DPrintf(LOG_LEVEL_ELECTION, "Host %d (%s, term: %d) recv RequestVoteRPC from (pid: %d, term: %d) ", rf.me, GetServerState(rf.nodeStatus), rf.currentTerm, args.CandidateId, candidate_term)
-	rf.termCheck(candidate_term)
+ 
+	if candidate_term > rf.currentTerm {
+		DebugP(dElection,"S%d (%s) term is lower than candidate, reset to follower", rf.me, GetServerState(rf.nodeStatus))
+		rf.setStateToFollower(candidate_term)
+	}
+
 	reply.Term = host_term
 
 	if candidate_term < host_term {
@@ -344,7 +348,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.VoteGranted = true
 			rf.lastContactWithPeer = time.Now()
 			rf.persist()
-			DPrintf(LOG_LEVEL_ELECTION, "Host %d granted vote for candidate %d on term %d", rf.me, rf.votedFor, candidate_term)
+			DebugP(dElection,"S%d granted vote for S%d, term %d", rf.me, rf.votedFor, rf.currentTerm)
 		}
 	}
 
@@ -524,24 +528,27 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	}
 
 	rf.mu.Lock()
-	DPrintf(LOG_LEVEL_ELECTION, "Host %d (%s, term: %d) sent RequestVoteRPC to (pid: %d)", rf.me,  GetServerState(rf.nodeStatus), rf.currentTerm, server)
-	
-	
+	defer rf.mu.Unlock()
+
 	if rf.currentTerm != args.Term {
-		
-		rf.mu.Unlock()
+		DebugP(dDrop, "S%d Term mistmatch found! Drop RPC reply", rf.me)
+ 
 		return false
 	}
 
-	rf.termCheck(reply.Term)
+	if reply.Term > rf.currentTerm {
+		DebugP(dElection,"S%d term(%d)is higher than candidate S%d, term (%d) stepping down", server, reply.Term, rf.me, rf.currentTerm)
+		rf.setStateToFollower(reply.Term) 
+		return false;
+	}
 
-	if rf.nodeStatus == Candidate && reply.VoteGranted == true{
+	if rf.nodeStatus == Candidate && reply.VoteGranted == true {
+		DebugP(dElection,"S%d received votes from S%d for term %d", rf.me, server, args.Term)
 		rf.votesReceived++
 	}
  	 
 	rf.lastContactWithPeer = time.Now()
-	rf.mu.Unlock()
-	
+ 	
 	return ok
 }
 
@@ -827,7 +834,6 @@ func (rf * Raft) candidateStartElection() {
 	rf.electionTimeout = rf.getNewElectionTimeout()
 	rf.persist()
 	DebugP(dElection,"C%d increments currentTerm to %d", rf.me, rf.currentTerm)
-	
 	requestVoteArgs := RequestVoteArgs{rf.currentTerm, rf.me, rf.getLastLogIdx(), rf.getLastLogTerm()} 
 	for peerId := range rf.peers {
 		if peerId != rf.me {
@@ -860,10 +866,9 @@ func (rf * Raft) candidateTransitionToLeader() {
 	rf.leaderId = rf.me 
 	rf.nodeStatus = Leader
 	 
-	DPrintf(LOG_LEVEL_ELECTION, "Server id %d  became leader for term %d ", rf.me , rf.currentTerm)
-	
 	leaderLastLogIdx := rf.getLastLogIdx() + 1
-	DPrintf(LOG_LEVEL_PERSISTENCE,"Iniit all next index to %d ", leaderLastLogIdx)
+	DebugP(dElection, "S%d became leader for term %d", rf.me, rf.currentTerm)
+
 	for peerId := range rf.peers {
 		if peerId != rf.me {
 			rf.nextIndex[peerId] = leaderLastLogIdx
