@@ -24,7 +24,7 @@ import (
  
 	"sync/atomic"
 	//"util"
-	// "fmt"
+	"fmt"
 	"6.824/labgob"
 	"6.824/labrpc"
 )
@@ -251,6 +251,7 @@ func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) {
 	for ;startIdx < len(logsFromLeader); startIdx++ {
 		rf.logs = append(rf.logs, logsFromLeader[startIdx])
 	}
+	DebugP(dReplica, "S%d accepting logs:[%s]", rf.me, serializeLogContents(logsFromLeader))
 	rf.persist()
 }
 
@@ -383,35 +384,32 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
   	candidate_term := args.Term
 	host_term := rf.currentTerm
  
-	DPrintf(LOG_LEVEL_ELECTION, "Host %d (%s, term: %d) recv AppendEntriesRPC from (pid: %d, term: %d) ", rf.me, GetServerState(rf.nodeStatus), rf.currentTerm, args.LeaderId, candidate_term)
-	
-	check_result := rf.termCheck(candidate_term)
+ 
+	// check_result := rf.termCheck(candidate_term)
 	reply.Term  = rf.currentTerm
 	reply.LogConsistent = true
 	reply.Xterm = -1
 	reply.XIndex = -1
 	reply.Xlen = -1
 
-	if candidate_term < rf.currentTerm {
+	if candidate_term < host_term {
+		DebugP(dElection,"Reject AE from Leader %d due to term mismatch", args.LeaderId)
 		reply.Success = false
-		reply.Term = rf.currentTerm
+		rf.mu.Unlock()
+		return 
 	}
-	
-	if check_result == false {
+
+	if candidate_term > host_term {
+		rf.setStateToFollower(candidate_term)
 		rf.leaderId = args.LeaderId
 	}
 
-	if candidate_term < host_term {
-		reply.Success = false
-
-	} else if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == false {
-	//	DPrintf(LOG_LEVEL_REPLICATION, "Host %d does not contain log %d from leader %d", rf.me, args.PrevLogIndex, args.LeaderId)
+	 if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == false {
 		rf.lastContactWithPeer = time.Now()
 		rf.leaderId = args.LeaderId
 		reply.Success = false
 		reply.LogConsistent = false
-
-		// log is too short. 
+ 
 		if rf.getLastLogIdx() < args.PrevLogIndex {
 			reply.Xlen = len(rf.logs)
 		} else {
@@ -423,7 +421,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 
 	} else if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == true {
-	//	DPrintf(LOG_LEVEL_REPLICATION, "Host %d contain log %d from leader %d", rf.me, args.PrevLogIndex, args.LeaderId)
+ 
 		rf.lastContactWithPeer = time.Now()
 		rf.leaderId = args.LeaderId
 		
@@ -434,6 +432,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
  
 		if args.LeaderCommit > rf.commitIndex {
 			rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIdx())
+			DebugP(dCommit, "S%d set commit index to %d", rf.commitIndex)
 		}
 
 	} else {
@@ -451,10 +450,17 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm int) bool {
 	 
 	if rf.getLastLogIdx() < leaderPrevLogIdx {
+		DebugP(dReplica,"S%d logs (len: %d): [%s] are shorter than leader logs %d", rf.me, len(rf.logs), serializeLogContents(rf.logs), leaderPrevLogIdx)
 		return false
 	}
 
 	if rf.logs[leaderPrevLogIdx].CommandTerm != leaderPrevLogTerm {
+		DebugP(dReplica,"S%d logs: [%s] has a conflict at index %d, (HostTerm: %d, LeaderTerm:%d)",
+		rf.me, 
+		serializeLogContents(rf.logs),
+		leaderPrevLogIdx,
+		rf.logs[leaderPrevLogIdx].CommandTerm,
+		leaderPrevLogTerm)
 		return false	
 	}
 
@@ -557,11 +563,11 @@ func (rf *Raft) scanNextIndex() {
 	leaderLastLogIdx := rf.getLastLogIdx()
 	for peerId := range rf.peers {
 		if peerId != rf.me && leaderLastLogIdx >= rf.nextIndex[peerId] {
-			DPrintf(LOG_LEVEL_REPLICATION, "Leader %d sending log to peer %d", rf.me, peerId )
 			//go send
 			prevLogIdx := rf.nextIndex[peerId] - 1
 			prevLogTerm := rf.logs[prevLogIdx].CommandTerm
 			entries := rf.getLeaderLogs(rf.nextIndex[peerId])
+			DebugP(dReplica, "Leader %d sending log:[%s] to peer %d", rf.me, serializeLogContents(entries),peerId)
 			initalAppendEntryRPC := AppendEntriesArgs{rf.currentTerm, rf.me, prevLogIdx, prevLogTerm, entries, rf.commitIndex}
 			go rf.sendAppendEntries(peerId, &initalAppendEntryRPC, &AppendEntriesReply{})
 		}
@@ -579,6 +585,7 @@ func (rf * Raft) lookForMatchIndex() {
 						prevLogTerm := rf.logs[prevLogIdx].CommandTerm
 						entries := rf.getLeaderLogs(rf.nextIndex[peerId])
 						initalAppendEntryRPC := AppendEntriesArgs{rf.currentTerm, rf.me, prevLogIdx, prevLogTerm, entries, rf.commitIndex}
+						DebugP(dReplica, "Leader %d sending log:[%s] to peer %d", rf.me, serializeLogContents(entries),peerId)
 						go rf.sendAppendEntries(peerId, &initalAppendEntryRPC, &AppendEntriesReply{})
 					}
 				}
@@ -595,27 +602,27 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 	for {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	if !ok {
-		DPrintf(LOG_LEVEL_ELECTION,"Servers %d is unreachable", server)
 		return ok
 	}
 	rf.mu.Lock()
-
+	DebugP(dReplica,"S%d send logs %s to S%d", rf.me, serializeLogContents(args.Entries), server)
 	// Handles cases where we get old RPC reply
- 
 	if rf.currentTerm != args.Term {
+		DebugP(dDrop,"Dropping replies from %d because conflict (CT: %d, ST: %d)", server, rf.currentTerm, args.Term)
 		rf.mu.Unlock()
 		return false
 	}
 
 	host_term := args.Term
 	if reply.Term > host_term {
-		DPrintf(LOG_LEVEL_ELECTION, "Server %d is no longer the leader ", rf.me)
+		DebugP(dElection, "S%d steps down for term %d", host_term)
 		rf.setStateToFollower(reply.Term)
 		rf.mu.Unlock()
 		return true;
 	}
 
-	if rf.nodeStatus != Leader || rf.currentTerm != args.Term {
+	if rf.nodeStatus != Leader {
+		
 		rf.mu.Unlock()
 		return false
 	}
@@ -628,9 +635,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 		rf.matchIndex[server] = newMatchIndex
 		rf.nextIndex[server] = rf.matchIndex[server] + 1
-	//DebugPrintf("Leader %d to host %d, (nextIndex %d, matchIndex %d) log len %d ", rf.me, server, rf.nextIndex[server], rf.matchIndex[server], len(args.Entries))
-	   
-	  //DPrintf(LOG_LEVEL_REPLICATION,"Match value peer %d match up to  %d", server, rf.matchIndex[server])
+ 
 	   for N := rf.commitIndex + 1; N <= rf.getLastLogIdx(); N++ {
 		 
 			serverReplicatedCount := 0
@@ -638,22 +643,26 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 				if peerId != rf.me && rf.matchIndex[peerId] >= N {
 					serverReplicatedCount++
 				}
-				// DPrintf(LOG_LEVEL_REPLICATION, "replicated to %d servers", serverReplicatedCount)
-				 
+
 				if serverReplicatedCount >= (len(rf.peers)/2) {
-				//	DPrintf(LOG_LEVEL_REPLICATION, "Server replicated count %d ", serverReplicatedCount)
+			
 					if rf.logs[N].CommandTerm == args.Term {
 						rf.commitIndex = N
-				//		DPrintf(LOG_LEVEL_REPLICATION, "Leader Set commit index to %d", N)
+						DebugP(dCommit, "(%d) servers has logs matched up to %d, set S%d commit index to %d",
+						serverReplicatedCount,
+						N,
+						rf.me,
+						rf.commitIndex)
+						DebugP(dCommit, "S%d logs: [%s]", rf.me, serializeLogContents(rf.logs))
 					}
 				}
 			}
 	   }
 	   rf.mu.Unlock()
 	   return true	
+	   
 	} else if reply.LogConsistent == false && rf.nodeStatus == Leader {
-	//	DPrintf(LOG_LEVEL_WARN, "Retrying happened~! %d ", args.PrevLogIndex)
-	//	DebugPrintf("Log inconsistent, retry")
+
 		if reply.Xterm != -1 {
 			// handles the first two cases
 			lookupIdx := rf.lookupLastEntryWithTerm(reply.Xterm)
@@ -661,24 +670,36 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 			if lookupIdx == -1 {
 				// Leader does not have xTerm
 				rf.nextIndex[server] = reply.XIndex
+				DebugP(dReplica,"Leader %d does not have conflict term %d with S%d, setting nextIndex[S%d] to %d",rf.me, reply.Xterm, server, server, rf.nextIndex[server])
+				DebugP(dReplica,"Leader %d logs: %s", rf.me, serializeLogContents(rf.logs))
 			} else {
 				// Leader have xTerm
 				rf.nextIndex[server] = lookupIdx + 1
+				DebugP(dReplica,"Leader %d have conflict term %d, ([%s])", rf.me, reply.Xterm, serializeLog(rf.logs[lookupIdx]))
+				DebugP(dReplica,"Leader %d logs: %s",rf.me, serializeLogContents(rf.logs))
 			}
 
 		} else if reply.Xlen != -1 {
 			// handles the case where follower's log is too short
 			//DebugPrintf(LOG_LEVEL_PERSISTENCE, "Hi")
 			rf.nextIndex[server] = reply.Xlen
+			DebugP(dReplica, "S%d log is too short. Setting rf.nextIndex[S%d]=%d", server,server, rf.nextIndex[server])
 		} else {
-			DebugPrintf("SHOULD ENTER THIS CASE!")
+			failMsg := fmt.Sprintf("Error! reply.Xterm: %d , reply.Index: %d, reply.Xlen: %d", reply.Xterm, reply.XIndex, reply.Xlen)
+			panic(failMsg)
 		}
 		
-		// rf.nextIndex[server]--
  		args.Term = rf.currentTerm
 		args.PrevLogIndex = rf.nextIndex[server] - 1
 		args.PrevLogTerm = rf.logs[args.PrevLogIndex].CommandTerm
 		args.Entries = rf.getLeaderLogs(rf.nextIndex[server])
+		DebugP(dReplica, "Leader %d retrying with prevLogIdx:%d, prevLogTerm: %d, entries: %s to S%d", 
+		rf.me, 
+		args.PrevLogIndex, 
+		args.PrevLogTerm, 
+		serializeLogContents(args.Entries), 
+		server)
+
 		rf.mu.Unlock()
 		
 	} else {
@@ -724,7 +745,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.appendLogEntry(command)
 	index = rf.getLastLogIdx()
 	term = rf.getLastLogTerm()
-	DPrintf(LOG_LEVEL_REPLICATION,"Append command %s", command)
+
+	DebugP(dReplica, "Leader %d append command %s for term %d", rf.me, command, term)
+
 	// Use this as the opportunity to start replicating logs
 	rf.scanNextIndex()
 	return index, term, isLeader
@@ -788,6 +811,7 @@ func (rf *Raft) lifeCycleManager() {
 				// Check for election timeouts
 				elaspedTime := time.Now().Sub(rf.lastContactWithPeer)
 				if elaspedTime > (time.Duration(rf.electionTimeout) * time.Millisecond)  {
+					DebugP(dElection,"Election timeout: %d without electing leader for term %d", rf.electionTimeout, rf.currentTerm)
 					rf.candidateStartElection()
 				}
 			}
@@ -879,12 +903,9 @@ func (rf * Raft) candidateTransitionToLeader() {
 	rf.leaderSendHeartBeatMessages(rf.me, rf.currentTerm, &rf.nextIndex,&rf.logs)
 }
 
-func (rf * Raft) leaderTransitionToFollower() {
-
-}
-
 func (rf *Raft) setStateToFollower(peerTerm int) {
 	rf.currentTerm = peerTerm
+ 
 	rf.votedFor = HAS_NOT_VOTED
 	rf.votesReceived = 0 
 	rf.nodeStatus = Follower
@@ -923,7 +944,6 @@ func (rf * Raft) bootStrapState(hostServerId int) {
 	rf.matchIndex = make(map[int]int)
 
 	rf.leaderCommitWaterMark = 0
-	// rf.persist()
 }
 //
 // the service or tester wants to create a Raft server. the ports

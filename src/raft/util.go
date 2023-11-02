@@ -12,6 +12,7 @@ import (
 
 type logTopic string
 const (
+	dReplica logTopic = "REPL"
 	dCommit logTopic = "CMIT"
 	dLeader logTopic = "LEAD"
 	dPersist logTopic = "PERS"
@@ -19,6 +20,7 @@ const (
 	dElection logTopic = "ELEC"
 	dVote logTopic = "VOTE"
 	dDrop logTopic = "DROP"
+	dWarn logTopic = "WARN"
 )
 
 // Debugging
