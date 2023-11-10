@@ -50,7 +50,7 @@ func getVerbosity() int {
 
 
 func DebugP(topic logTopic, format string, a...interface{}) {
-	if debugVerbosity >= 1 {
+	if debugVerbosity >= 1 && topic == dCommit {
 		log.SetFlags(0)
 		time := time.Since(debugStart).Microseconds()
 		time /= 100

@@ -24,6 +24,7 @@ import (
  
 	"sync/atomic"
 	//"util"
+//	"math/rand"
 	"fmt"
 	"6.824/labgob"
 	"6.824/labrpc"
@@ -235,7 +236,7 @@ func (rf *Raft) getLeaderLogs(startLogIdx int) []Log {
 }
 
 // Converge logs from leader
-func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) {
+func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) int {
 	logsFromLeader := *leaderLogs
 	startIdx := 0
 
@@ -251,8 +252,8 @@ func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) {
 	for ;startIdx < len(logsFromLeader); startIdx++ {
 		rf.logs = append(rf.logs, logsFromLeader[startIdx])
 	}
-	DebugP(dReplica, "S%d accepting logs:[%s]", rf.me, serializeLogContents(logsFromLeader))
 	rf.persist()
+	return startLogIdx + len(logsFromLeader)
 }
 
 func (rf * Raft) printLogContent() {
@@ -431,8 +432,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.acceptLogsFromLeader(&args.Entries, args.PrevLogIndex + 1)
  
 		if args.LeaderCommit > rf.commitIndex {
-			rf.commitIndex = min(args.LeaderCommit, rf.getLastLogIdx())
-			DebugP(dCommit, "S%d set commit index to %d", rf.commitIndex)
+			lastNewLogIdx := args.PrevLogIndex + len(args.Entries)
+			rf.commitIndex = min(args.LeaderCommit, lastNewLogIdx)
+			DebugP(dCommit, "S%d set commit index to %d", rf.me,  rf.commitIndex)
+			DebugP(dCommit, "S%d recv logs [%s] from leader %d, T: %d, prevLogIdx: %d", rf.me, serializeLogContents(args.Entries), args.LeaderId, args.Term, args.PrevLogIndex)
+			DebugP(dCommit, "S%d log content: [%s]", rf.me, serializeLogContents(rf.logs))
 		}
 
 	} else {
@@ -493,7 +497,10 @@ func (rf * Raft) lookupLastEntryWithTerm(xTerm int) int {
 
 // What if we design an exponeial backoff wrt number of failed tries?
 func (rf *Raft) getNewElectionTimeout() int {
-	return RandRange(230,400)
+	 
+	
+	//return (int)(150 + rand.Int31n(150))
+	 return RandRange(150,300)
 }
 
 //
@@ -635,7 +642,8 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 		rf.matchIndex[server] = newMatchIndex
 		rf.nextIndex[server] = rf.matchIndex[server] + 1
- 
+		
+	   DebugP(dReplica,"Setting L%d.matchIndex[S%d]=", rf.me, rf.matchIndex[server])
 	   for N := rf.commitIndex + 1; N <= rf.getLastLogIdx(); N++ {
 		 
 			serverReplicatedCount := 0
@@ -653,7 +661,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 						N,
 						rf.me,
 						rf.commitIndex)
-						DebugP(dCommit, "S%d logs: [%s]", rf.me, serializeLogContents(rf.logs))
+						DebugP(dCommit, "Leader S%d logs: [%s]", rf.me, serializeLogContents(rf.logs))
 					}
 				}
 			}
@@ -836,7 +844,47 @@ func (rf * Raft) LeaderHeartBeatManager() {
 		}
 		rf.mu.Unlock()
 
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// Shrink the size of the log
+/**
+	NOTE:
+		-> We should not add a stub any more
+		-> Consider the following:
+			-> rf.logs = [0 1 2 3 4 5]
+			-> follower recv snapshot RPC from leader and has to discard first 2 entries
+			-> removeLogPrefix(2)
+				-> really we need to remove logs [0 1 2]
+				-> [3,4,5], lastIncludedIndex = 2, lastIncludedTerm = 2
+				-> lastLogIdx()
+					-> (current):
+						-> len(rf.logs) - 1 
+							-> 6 - 1
+							-> 5 
+
+					-> (with snapshot)
+						-> lastIncludedIndex = 2
+						-> len(rf.logs) = 3
+						-> lastIncludedIndex + len(rf.logs) = 5
+				-> getLastLogTerm()
+					-> rf.getLastLogIdx() = 5
+					-> (current):
+						-> rf.logs[5].CommandTerm
+							-> 5
+					-> (with snapshot)
+						-> lastIncludedIndex = 2
+						-> internalLogPtr := 5 - lastIncludedIndex 
+										  := 5 -2 
+										  := 3
+**/
+
+func (rf *Raft) removeLogPrefix(lastIncludedIdx int) {
+	if lastIncludedIdx >= len(rf.logs) {
+		rf.logs = make([]Log, 0)
+		rf.AppendNewLog(Log{true,"Stub",0})
+		return 
 	}
 }
 
@@ -956,6 +1004,9 @@ func (rf * Raft) bootStrapState(hostServerId int) {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 //
+
+ 
+
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
@@ -978,6 +1029,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.lifeCycleManager()
     go rf.LeaderHeartBeatManager()
 	go rf.lookForMatchIndex()
-
+	//go rf.lookForMatch()
 	return rf
 }

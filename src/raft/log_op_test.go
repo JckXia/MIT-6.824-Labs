@@ -165,8 +165,9 @@ func TestRaftOverwriteLastLogFromLeader(t * testing.T) {
 	assert.Equal(raftLeaderLogs[1].Command, "Leader Write X -> 4")
 	assert.Equal(raftLeaderLogs[2].Command, "Leader Write X -> 5")
 	
-	raftFollwer.acceptLogsFromLeader(&raftLeaderLogs, 3)
+	lastLogIdx := raftFollwer.acceptLogsFromLeader(&raftLeaderLogs, 3)
 	assert.Equal(len(raftFollwer.logs), 6)
+	assert.Equal(lastLogIdx, 6)
 	assert.Equal(raftFollwer.logs[1].Command, "Write X -> 1")
 	assert.Equal(raftFollwer.logs[2].Command, "Write X -> 2")
 	assert.Equal(raftFollwer.logs[3].Command, "Write X -> 3")
@@ -174,6 +175,23 @@ func TestRaftOverwriteLastLogFromLeader(t * testing.T) {
 	assert.Equal(raftFollwer.logs[5].Command, "Leader Write X -> 5")
 }
 
+
+func TestRaftHandleHeartBeatLogFromLeader(t * testing.T) {
+	 
+	assert := assert.New(t)
+	raftFollwer := generateRaftWithXLogs(t,3)
+
+	// Should be [L3,L4,L5]
+	// raftLeaderLogs := raftLeader.getLeaderLogs(3)
+	// assert.Equal(len(raftLeaderLogs), 3 , "leader should have 3 logs")
+	// assert.Equal(raftLeaderLogs[0].Command, "Leader Write X -> 3")
+	// assert.Equal(raftLeaderLogs[1].Command, "Leader Write X -> 4")
+	// assert.Equal(raftLeaderLogs[2].Command, "Leader Write X -> 5")
+	heartBeatLogs := make([]Log,0)
+	lastNewLogIdx := raftFollwer.acceptLogsFromLeader(&heartBeatLogs, 3)
+	assert.Equal(lastNewLogIdx, 3)
+
+}
 /**
 			0 	 1	2  3  4 5
 Leader   Stub   L1 L2 L3 L4 L5 
