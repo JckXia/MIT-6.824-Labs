@@ -270,7 +270,7 @@ func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) int {
 
 	for hostLogIdxStart := startLogIdx; hostLogIdxStart < len(rf.logs); hostLogIdxStart++ {
 		// Logs with conflicting term found!
-		if startIdx < len(logsFromLeader) && rf.getLogTermAtIndex(hostLogIdxStart) != logsFromLeader[startIdx].CommandTerm {
+		if startIdx < len(logsFromLeader) &&  rf.getLogTermAtIndex(hostLogIdxStart)  != logsFromLeader[startIdx].CommandTerm {
 			rf.logs = rf.logs[:hostLogIdxStart]
 			rf.logs = append(rf.logs, logsFromLeader[startIdx])
 		}
@@ -454,7 +454,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if rf.getLastLogIdx() < args.PrevLogIndex {
 			reply.Xlen = len(rf.logs)
 		} else {
-			conflict_term := rf.logs[args.PrevLogIndex].CommandTerm
+			conflict_term := rf.getLogTermAtIndex(args.PrevLogIndex)
 			first_idx_with_conflict := rf.lookupFirstEntryWithTerm(conflict_term)
 
 			reply.Xterm = conflict_term
@@ -498,12 +498,12 @@ func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm 
 		return false
 	}
 	
-	if rf.logs[leaderPrevLogIdx].CommandTerm != leaderPrevLogTerm {
+	if rf.getLogTermAtIndex(leaderPrevLogIdx) != leaderPrevLogTerm {
 		DebugP(dReplica,"S%d logs: [%s] has a conflict at index %d, (HostTerm: %d, LeaderTerm:%d)",
 		rf.me, 
 		serializeLogContents(rf.logs),
 		leaderPrevLogIdx,
-		rf.logs[leaderPrevLogIdx].CommandTerm,
+		rf.getLogTermAtIndex(leaderPrevLogIdx),
 		leaderPrevLogTerm)
 		return false	
 	}
@@ -515,11 +515,17 @@ func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm 
 // TODO:
 //	-> Rewrite this using binary search
 func (rf *Raft) lookupFirstEntryWithTerm(xTerm int) int {
+
+	if rf.lastIncludedTerm == xTerm {
+		return rf.lastIncludedIdx
+	}
+
 	for i:= 0; i< len(rf.logs); i++ {
 		if rf.logs[i].CommandTerm == xTerm {
-			return i
+			return i + rf.lastIncludedIdx
 		}
 	}
+
 	return -1
 }
 
@@ -529,8 +535,11 @@ func (rf * Raft) lookupLastEntryWithTerm(xTerm int) int {
 
 	for i := len(rf.logs) - 1; i >=0; i-- {
 		if rf.logs[i].CommandTerm == xTerm {
-			return i
+			return i 
 		}
+	}
+	if xTerm == rf.lastIncludedTerm {
+		return rf.lastIncludedIdx
 	}
 	return -1
 }
@@ -610,9 +619,8 @@ func (rf *Raft) scanNextIndex() {
 	leaderLastLogIdx := rf.getLastLogIdx()
 	for peerId := range rf.peers {
 		if peerId != rf.me && leaderLastLogIdx >= rf.nextIndex[peerId] {
-			//go send
 			prevLogIdx := rf.nextIndex[peerId] - 1
-			prevLogTerm := rf.logs[prevLogIdx].CommandTerm
+			prevLogTerm := rf.getLogTermAtIndex(prevLogIdx)
 			entries := rf.getLeaderLogs(rf.nextIndex[peerId])
 			DebugP(dReplica, "Leader %d sending log:[%s] to peer %d", rf.me, serializeLogContents(entries),peerId)
 			initalAppendEntryRPC := AppendEntriesArgs{rf.currentTerm, rf.me, prevLogIdx, prevLogTerm, entries, rf.commitIndex}
@@ -626,20 +634,10 @@ func (rf * Raft) lookForMatchIndex() {
 	for rf.killed() == false {
 		rf.mu.Lock()
 			if rf.nodeStatus == Leader {
-				for peerId := range rf.peers {
-					if peerId != rf.me && rf.getLastLogIdx() >= rf.nextIndex[peerId] {
-						prevLogIdx := rf.nextIndex[peerId] - 1
-						prevLogTerm := rf.logs[prevLogIdx].CommandTerm
-						entries := rf.getLeaderLogs(rf.nextIndex[peerId])
-						initalAppendEntryRPC := AppendEntriesArgs{rf.currentTerm, rf.me, prevLogIdx, prevLogTerm, entries, rf.commitIndex}
-						DebugP(dReplica, "Leader %d sending log:[%s] to peer %d", rf.me, serializeLogContents(entries),peerId)
-						go rf.sendAppendEntries(peerId, &initalAppendEntryRPC, &AppendEntriesReply{})
-					}
-				}
+				rf.scanNextIndex()
 			}
 		rf.mu.Unlock()
- 
-		
+
 		time.Sleep(20* time.Millisecond)
 	}
 }
@@ -694,7 +692,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 				if serverReplicatedCount >= (len(rf.peers)/2) {
 			
-					if rf.logs[N].CommandTerm == args.Term {
+					if rf.getLogTermAtIndex(N) == args.Term {
 						rf.commitIndex = N
 						DebugP(dCommit, "(%d) servers has logs matched up to %d, set S%d commit index to %d",
 						serverReplicatedCount,
@@ -1032,7 +1030,7 @@ func (rf * Raft) bootStrapState(hostServerId int) {
 	rf.matchIndex = make(map[int]int)
 
 	rf.lastIncludedIdx = 0
-	rf.lastIncludedTerm = -1
+	rf.lastIncludedTerm = 0
 }
 //
 // the service or tester wants to create a Raft server. the ports
@@ -1070,6 +1068,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.lifeCycleManager()
     go rf.LeaderHeartBeatManager()
 	go rf.lookForMatchIndex()
-	//go rf.lookForMatch()
+ 
 	return rf
 }
