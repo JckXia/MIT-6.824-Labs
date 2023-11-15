@@ -196,9 +196,20 @@ func (rf *Raft) deleteLogSuffix(startLogIdx int) {
 	}
 
 	if startLogIdx < len(rf.logs) {
-		rf.logs = append(rf.logs[:startLogIdx])
+		adjustedIdx := rf.getInternalLogIdx(startLogIdx)
+		rf.logs = append(rf.logs[:adjustedIdx])
 		rf.persist()
 	}
+}
+
+
+func (rf *Raft) getInternalLogIdx(logIdx int) int {
+	adjustedIdx := logIdx - rf.lastIncludedIdx
+	
+	if adjustedIdx >= 0 && adjustedIdx < len(rf.logs) {
+		return adjustedIdx
+	}
+	return 0
 }
 
 // We will use this with snapshot (since we'd need to truncate the logs)
@@ -250,7 +261,8 @@ func (rf *Raft) getLeaderLogs(startLogIdx int) []Log {
 	if startLogIdx >= rf.getLastLogIdx() + 1 {
 		DPrintf(LOG_LEVEL_WARN, "Warning! attempting to retrieve log out of bound at idx: %d", startLogIdx)
 	}
-	logsToReturn := rf.logs[startLogIdx:]
+	adjustedIdx := rf.getInternalLogIdx(startLogIdx)
+	logsToReturn := rf.logs[adjustedIdx:]
 
 	newLogs := make([]Log, len(logsToReturn))
 	
@@ -264,13 +276,14 @@ func (rf *Raft) getLeaderLogs(startLogIdx int) []Log {
 }
 
 // Converge logs from leader
+// TODO: Think through how this will work with new system
 func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) int {
 	logsFromLeader := *leaderLogs
 	startIdx := 0
 
 	for hostLogIdxStart := startLogIdx; hostLogIdxStart < len(rf.logs); hostLogIdxStart++ {
 		// Logs with conflicting term found!
-		if startIdx < len(logsFromLeader) &&  rf.getLogTermAtIndex(hostLogIdxStart)  != logsFromLeader[startIdx].CommandTerm {
+		if startIdx < len(logsFromLeader) &&  rf.getLogTermAtIndex(hostLogIdxStart) != logsFromLeader[startIdx].CommandTerm {
 			rf.logs = rf.logs[:hostLogIdxStart]
 			rf.logs = append(rf.logs, logsFromLeader[startIdx])
 		}
@@ -721,7 +734,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 			} else {
 				// Leader have xTerm
 				rf.nextIndex[server] = lookupIdx + 1
-				DebugP(dReplica,"Leader %d have conflict term %d, ([%s])", rf.me, reply.Xterm, serializeLog(rf.logs[lookupIdx]))
+				DebugP(dReplica,"Leader %d have conflict term %d, ([])", rf.me, reply.Xterm)
 				DebugP(dReplica,"Leader %d logs: %s",rf.me, serializeLogContents(rf.logs))
 			}
 
@@ -737,7 +750,8 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		
  		args.Term = rf.currentTerm
 		args.PrevLogIndex = rf.nextIndex[server] - 1
-		args.PrevLogTerm = rf.logs[args.PrevLogIndex].CommandTerm
+		args.PrevLogTerm = rf.getLogTermAtIndex(args.PrevLogIndex)
+
 		args.Entries = rf.getLeaderLogs(rf.nextIndex[server])
 		DebugP(dReplica, "Leader %d retrying with prevLogIdx:%d, prevLogTerm: %d, entries: %s to S%d", 
 		rf.me, 
@@ -831,7 +845,7 @@ func (rf *Raft) lifeCycleManager() {
 			
 			for rf.lastApplied < rf.commitIndex {
 				rf.lastApplied++
-				logEntryToCommit := rf.logs[rf.lastApplied]
+				logEntryToCommit := rf.getLogAtIndex(rf.lastApplied)
 				applyMsg := ApplyMsg{true, logEntryToCommit.Command, rf.lastApplied, true,nil, 0,0}	
 				DebugP(dCommit, "S%d applying log (%s) at term %d, CI %d, isLeader: %v", rf.me, serializeLog(logEntryToCommit) , rf.currentTerm, rf.lastApplied, rf.nodeStatus == Leader)
 				rf.applyCh <- applyMsg
