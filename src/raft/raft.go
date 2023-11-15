@@ -96,9 +96,9 @@ type Raft struct {
 	nextIndex  map[int]int 
 	matchIndex map[int]int
 
-	// Reserved for leader to keep track of its commitIndex
-	leaderCommitWaterMark int
-	followerReplicationCount int // Once this value > 50% we reset leader commitIndex
+	//SnapShot
+	lastIncludedIdx int
+	lastIncludedTerm int
 }
 
 // Utility function. Caller should guarantee its threadsafe
@@ -201,15 +201,43 @@ func (rf *Raft) deleteLogSuffix(startLogIdx int) {
 	}
 }
 
+// We will use this with snapshot (since we'd need to truncate the logs)
+//	-> (The physical log will be missing)
+func (rf *Raft) getLogAtIndex(logIdx int) Log {
+
+	if logIdx == rf.lastIncludedIdx {
+		return Log{true, "", rf.lastIncludedTerm}
+	}
+	
+	adjustedIdx := logIdx - rf.lastIncludedIdx
+	if adjustedIdx >= 0 && adjustedIdx < len(rf.logs) {
+		return rf.logs[adjustedIdx]
+	} 
+	panicMsg := fmt.Sprintf("Index %d is out of range", logIdx)
+	panic(panicMsg)
+}
+
+func (rf *Raft) getLogTermAtIndex(logIdx int) int {
+	if logIdx == rf.lastIncludedIdx {
+		return rf.lastIncludedTerm
+	}
+	adjustedIdx := logIdx - rf.lastIncludedIdx
+	if adjustedIdx >= 0 && adjustedIdx < len(rf.logs) {
+		return rf.logs[adjustedIdx].CommandTerm
+	}
+	panicMsg := fmt.Sprintf("Index %d is out of range", adjustedIdx)
+	panic(panicMsg)
+}
+
 // At any given moment, there will be at least one entry in rf.logs
 //	because raft logs are index'd by 1
 func (rf *Raft) getLastLogIdx() int {
-	return len(rf.logs) -1
+	return rf.lastIncludedIdx + len(rf.logs) -1
 }
 
 func (rf *Raft) getLastLog() Log {
 	lastLogIdx := rf.getLastLogIdx()
-	return rf.logs[lastLogIdx]
+	return rf.getLogAtIndex(lastLogIdx)
 }
 
 func (rf *Raft) getLastLogTerm() (int) {
@@ -242,7 +270,7 @@ func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) int {
 
 	for hostLogIdxStart := startLogIdx; hostLogIdxStart < len(rf.logs); hostLogIdxStart++ {
 		// Logs with conflicting term found!
-		if startIdx < len(logsFromLeader) && rf.logs[hostLogIdxStart].CommandTerm != logsFromLeader[startIdx].CommandTerm {
+		if startIdx < len(logsFromLeader) && rf.getLogTermAtIndex(hostLogIdxStart) != logsFromLeader[startIdx].CommandTerm {
 			rf.logs = rf.logs[:hostLogIdxStart]
 			rf.logs = append(rf.logs, logsFromLeader[startIdx])
 		}
@@ -297,6 +325,18 @@ type AppendEntriesReply struct {
 	Xterm int
 	XIndex int 
 	Xlen int
+}
+
+type InstallSnapshotArgs struct {
+	Term int
+	leaderId int
+	lastIncludedIndex int
+	lastIncludedTerm int
+	data []byte
+}
+
+type InstallSnapshotReply struct {
+	Term int
 }
 
 //
@@ -457,7 +497,7 @@ func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm 
 		DebugP(dReplica,"S%d logs (len: %d): [%s] are shorter than leader logs %d", rf.me, len(rf.logs), serializeLogContents(rf.logs), leaderPrevLogIdx)
 		return false
 	}
-
+	
 	if rf.logs[leaderPrevLogIdx].CommandTerm != leaderPrevLogTerm {
 		DebugP(dReplica,"S%d logs: [%s] has a conflict at index %d, (HostTerm: %d, LeaderTerm:%d)",
 		rf.me, 
@@ -991,7 +1031,8 @@ func (rf * Raft) bootStrapState(hostServerId int) {
 	rf.nextIndex = make(map[int]int)
 	rf.matchIndex = make(map[int]int)
 
-	rf.leaderCommitWaterMark = 0
+	rf.lastIncludedIdx = 0
+	rf.lastIncludedTerm = -1
 }
 //
 // the service or tester wants to create a Raft server. the ports
