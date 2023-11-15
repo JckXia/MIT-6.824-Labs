@@ -277,6 +277,14 @@ func (rf *Raft) getLeaderLogs(startLogIdx int) []Log {
 
 // Converge logs from leader
 // TODO: Think through how this will work with new system
+//		   -> Note, once we clear the logs we don't actually re-add a stub
+/**
+	rf.lastIncludedIdx: 5
+	rf.lastIncludedTerm: 3,
+	rf.logs =[]
+
+		-> technically have 5 logs (DONT INCLUDE THE STUB)
+**/
 func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) int {
 	logsFromLeader := *leaderLogs
 	startIdx := 0
@@ -284,7 +292,8 @@ func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) int {
 	for hostLogIdxStart := startLogIdx; hostLogIdxStart < len(rf.logs); hostLogIdxStart++ {
 		// Logs with conflicting term found!
 		if startIdx < len(logsFromLeader) &&  rf.getLogTermAtIndex(hostLogIdxStart) != logsFromLeader[startIdx].CommandTerm {
-			rf.logs = rf.logs[:hostLogIdxStart]
+			adjustedIdx := rf.getInternalLogIdx(hostLogIdxStart)
+			rf.logs = rf.logs[:adjustedIdx]
 			rf.logs = append(rf.logs, logsFromLeader[startIdx])
 		}
 		startIdx++
@@ -465,7 +474,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.LogConsistent = false
  
 		if rf.getLastLogIdx() < args.PrevLogIndex {
-			reply.Xlen = len(rf.logs)
+			reply.Xlen = len(rf.logs) + rf.lastIncludedIdx
 		} else {
 			conflict_term := rf.getLogTermAtIndex(args.PrevLogIndex)
 			first_idx_with_conflict := rf.lookupFirstEntryWithTerm(conflict_term)
@@ -548,7 +557,7 @@ func (rf * Raft) lookupLastEntryWithTerm(xTerm int) int {
 
 	for i := len(rf.logs) - 1; i >=0; i-- {
 		if rf.logs[i].CommandTerm == xTerm {
-			return i 
+			return i + rf.lastIncludedIdx
 		}
 	}
 	if xTerm == rf.lastIncludedTerm {
