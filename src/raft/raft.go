@@ -40,6 +40,10 @@ const (
 	Candidate  	 = 1
 	Leader		 = 2
 )
+
+const (
+	LOG_TRUNCATED = -2
+)
 //
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -97,8 +101,8 @@ type Raft struct {
 	matchIndex map[int]int
 
 	//SnapShot
-	lastIncludedIdx int
-	lastIncludedTerm int
+	lastIncludedIdx int // The index of the last entry in the log that the snapshot replaces (and state machine has applied)
+	lastIncludedTerm int // The term of afforementioned index
 }
 
 // Utility function. Caller should guarantee its threadsafe
@@ -229,6 +233,10 @@ func (rf *Raft) getLogAtIndex(logIdx int) Log {
 }
 
 func (rf *Raft) getLogTermAtIndex(logIdx int) int {
+	if logIdx < rf.lastIncludedIdx {
+		return LOG_TRUNCATED;
+	}
+
 	if logIdx == rf.lastIncludedIdx {
 		return rf.lastIncludedTerm
 	}
