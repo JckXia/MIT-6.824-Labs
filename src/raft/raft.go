@@ -139,6 +139,8 @@ func (rf *Raft) persist() {
 	 e.Encode(rf.votedFor)
 	 e.Encode(rf.currentTerm)
 	 e.Encode(rf.logs)
+	 e.Encode(rf.lastIncludedIdx)
+	 e.Encode(rf.lastIncludedTerm)
 	 data := w.Bytes()
 	 rf.persister.SaveRaftState(data)
 	 
@@ -161,16 +163,22 @@ func (rf *Raft) readPersist(data []byte) {
 	 var votedFor int 
 	 var currentTerm int
 	 var raftLogs []Log
+	 var lastIncludedIdx int
+	 var lastIncludedTerm int
 	 if d.Decode(&votedFor) != nil || 
 	 	d.Decode(&currentTerm) != nil ||
-		d.Decode(&raftLogs) != nil {
+		d.Decode(&raftLogs) != nil || 
+		d.Decode(&lastIncludedIdx) != nil ||
+		d.Decode(&lastIncludedTerm) != nil {
 		
 		DebugPrintf(LOG_LEVEL_WARN,"Could not deserialize from data")
 	 } else {
 		rf.votedFor = votedFor
 		rf.currentTerm = currentTerm
 		rf.logs = raftLogs
-		DPrintf(LOG_LEVEL_PERSISTENCE,"Server %d votedfor %d currentTerm %d, log len %d", rf.me, rf.votedFor, rf.currentTerm, len(rf.logs))
+		rf.lastIncludedIdx = lastIncludedIdx
+		rf.lastIncludedTerm = lastIncludedTerm
+		DPrintf(LOG_LEVEL_PERSISTENCE,"S erver %d votedfor %d currentTerm %d, log len %d", rf.me, rf.votedFor, rf.currentTerm, len(rf.logs))
 
 	 }
 }
@@ -225,10 +233,13 @@ func (rf *Raft) getLogAtIndex(logIdx int) Log {
 	}
 	
 	adjustedIdx := logIdx - rf.lastIncludedIdx
+	// adjustedIdx = 1, 
+	// logs = [{Stub,0}]
+
 	if adjustedIdx >= 0 && adjustedIdx < len(rf.logs) {
 		return rf.logs[adjustedIdx]
 	} 
-	panicMsg := fmt.Sprintf("Index %d is out of range", logIdx)
+	panicMsg := fmt.Sprintf("Index %d is out of range, lastInc %d, adj: %d, logs:[%s]", logIdx, rf.lastIncludedIdx, adjustedIdx, serializeLogContents(rf.logs))
 	panic(panicMsg)
 }
 
@@ -285,11 +296,11 @@ func (rf *Raft) getLeaderLogs(startLogIdx int) []Log {
 
 // Converge logs from leader
 // TODO: Think through how this will work with new system
-//		   -> Note, once we clear the logs we don't actually re-add a stub
+//			-> Correction: We actually need a stub to have this work properly
 /**
 	rf.lastIncludedIdx: 5
 	rf.lastIncludedTerm: 3,
-	rf.logs =[]
+	rf.logs =[{stub 0}]
 
 		-> technically have 5 logs (DONT INCLUDE THE STUB)
 **/
@@ -297,10 +308,15 @@ func (rf *Raft) acceptLogsFromLeader(leaderLogs *[]Log, startLogIdx int) int {
 	logsFromLeader := *leaderLogs
 	startIdx := 0
 
-	for hostLogIdxStart := startLogIdx; hostLogIdxStart < len(rf.logs); hostLogIdxStart++ {
+	if startLogIdx <= rf.lastIncludedIdx {
+		return -1
+	}
+	 
+	for hostLogIdxStart := startLogIdx; hostLogIdxStart <= rf.getLastLogIdx(); hostLogIdxStart++ {
 		// Logs with conflicting term found!
 		if startIdx < len(logsFromLeader) &&  rf.getLogTermAtIndex(hostLogIdxStart) != logsFromLeader[startIdx].CommandTerm {
 			adjustedIdx := rf.getInternalLogIdx(hostLogIdxStart)
+		 
 			rf.logs = rf.logs[:adjustedIdx]
 			rf.logs = append(rf.logs, logsFromLeader[startIdx])
 		}
@@ -329,6 +345,7 @@ func (rf * Raft) printLogContent() {
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
+	fmt.Println("Hello! From snapshot")
 }
 
 type Log struct {
@@ -455,8 +472,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
   	candidate_term := args.Term
 	host_term := rf.currentTerm
  
- 
-	// check_result := rf.termCheck(candidate_term)
 	reply.Term  = rf.currentTerm
 	reply.LogConsistent = true
 	reply.Xterm = -1
@@ -475,14 +490,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.leaderId = args.LeaderId
 	}
 
-	 if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == false {
+	if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == false {
+		// TODO: With snap shots we may need to detect when InstallingSnapShot is needed
 		rf.lastContactWithPeer = time.Now()
 		rf.leaderId = args.LeaderId
 		reply.Success = false
 		reply.LogConsistent = false
  
 		if rf.getLastLogIdx() < args.PrevLogIndex {
-			reply.Xlen = len(rf.logs) + rf.lastIncludedIdx
+			reply.Xlen = rf.getLastLogIdx()
 		} else {
 			conflict_term := rf.getLogTermAtIndex(args.PrevLogIndex)
 			first_idx_with_conflict := rf.lookupFirstEntryWithTerm(conflict_term)
@@ -1007,12 +1023,12 @@ func (rf * Raft) candidateTransitionToLeader() {
 	rf.leaderId = rf.me 
 	rf.nodeStatus = Leader
 	 
-	leaderLastLogIdx := rf.getLastLogIdx() + 1
+	// leaderLastLogIdx := rf.getLastLogIdx() + 1
 	DebugP(dElection, "S%d became leader for term %d", rf.me, rf.currentTerm)
 
 	for peerId := range rf.peers {
 		if peerId != rf.me {
-			rf.nextIndex[peerId] = leaderLastLogIdx
+			rf.nextIndex[peerId] = rf.getLastLogIdx() + 1
 			rf.matchIndex[peerId] = 0
 		}
 	}
