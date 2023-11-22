@@ -192,6 +192,35 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 	return ok
 }
 
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	
+	reply.Term = rf.currentTerm
+
+	if args.Term < rf.currentTerm {
+		return
+	}
+
+	if args.Term > rf.currentTerm {
+		rf.setStateToFollower(args.Term)
+		rf.leaderId = args.LeaderId
+	}
+	
+	if rf.getLastLogIdx() >= args.LastIncludedIndex  && args.LastIncludedIndex > rf.lastIncludedIdx {
+		if rf.getLogTermAtIndex(args.LastIncludedIndex) == args.LastIncludedTerm {
+			rf.trimLogAt(args.LastIncludedIndex)
+			rf.persister.SaveStateAndSnapshot(rf.getRaftState(), args.Data)
+			
+			snapshotApplyMsg := ApplyMsg{false,"", 0, true, args.Data, args.LastIncludedTerm, args.LastIncludedIndex}
+			go rf.sendSnapshotApplyMsg(snapshotApplyMsg)
+		}
+	}
+}
+
+func (rf * Raft) sendSnapshotApplyMsg(msg ApplyMsg) {
+	rf.applyCh <- msg
+}
 //
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
@@ -416,10 +445,10 @@ type AppendEntriesReply struct {
 
 type InstallSnapshotArgs struct {
 	Term int
-	leaderId int
-	lastIncludedIndex int
-	lastIncludedTerm int
-	data []byte
+	LeaderId int
+	LastIncludedIndex int
+	LastIncludedTerm int
+	Data []byte
 }
 
 type InstallSnapshotReply struct {
