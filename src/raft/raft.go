@@ -124,25 +124,28 @@ func (rf *Raft) GetState() (int, bool) {
 	return currTerm, isLeader 
 }
 
+func (rf *Raft) getRaftState() []byte {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+
+
+	e.Encode(rf.votedFor)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.logs)
+	e.Encode(rf.lastIncludedIdx)
+	e.Encode(rf.lastIncludedTerm)
+
+	return w.Bytes()
+}
 //
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	 w := new(bytes.Buffer)
-	 e := labgob.NewEncoder(w)
 
- 
-	 e.Encode(rf.votedFor)
-	 e.Encode(rf.currentTerm)
-	 e.Encode(rf.logs)
-	 e.Encode(rf.lastIncludedIdx)
-	 e.Encode(rf.lastIncludedTerm)
-	 data := w.Bytes()
-	 rf.persister.SaveRaftState(data)
+	 raftstate := rf.getRaftState()
+	 rf.persister.SaveRaftState(raftstate)
 	 
 	 DebugP(dPersist, "S%d,V:%d,CT:%d,logs:[%s]", rf.me, rf.votedFor, rf.currentTerm, serializeLogContents(rf.logs))
 }
@@ -294,6 +297,30 @@ func (rf *Raft) getLeaderLogs(startLogIdx int) []Log {
 	return newLogs
 }
 
+// trims the log (if any)
+//  -> Will also reset lastIncludedIdx/term
+func (rf *Raft) trimLogAt(prefix int) {
+	if prefix <= rf.lastIncludedIdx	|| prefix > rf.getLastLogIdx() {
+		return
+	}
+	 
+	lastInclTerm := rf.getLogTermAtIndex(prefix)
+
+	internalLogPtr := prefix - rf.lastIncludedIdx + 1
+	
+	
+	newLogSlice := []Log{Log{true, "Stub", 0}}
+	shrunkenSlice := rf.logs[internalLogPtr:]
+
+	mergedSlice := make([]Log, len(newLogSlice)+len(shrunkenSlice))
+	copy(mergedSlice, newLogSlice)
+	copy(mergedSlice[len(newLogSlice):], shrunkenSlice)
+	rf.logs = mergedSlice
+
+	rf.lastIncludedIdx = prefix
+	rf.lastIncludedTerm = lastInclTerm
+}
+
 // Converge logs from leader
 // TODO: Think through how this will work with new system
 //			-> Correction: We actually need a stub to have this work properly
@@ -346,6 +373,17 @@ func (rf * Raft) printLogContent() {
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	fmt.Println("Hello! From snapshot")
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	// log is too short to be snappshotted
+	if rf.getLastLogIdx() < index {
+		return
+	}
+	
+	rf.trimLogAt(index)
+	raftstate := rf.getRaftState()
+	rf.persister.SaveStateAndSnapshot(raftstate, snapshot)
 }
 
 type Log struct {

@@ -107,3 +107,65 @@ func TestRaftSnapshotLogOverwriteLogsFromLeader(t *testing.T) {
 	assert.Equal(raftFollower.getLogTermAtIndex(7),3)
 }
 
+func TestRaftSnapshotTrimLogsNoSnapshot(t * testing.T) {
+	raftLeader := generateRaftLaderWithYLogs(t,0)
+	assert := assert.New(t)
+
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write Y -> 7",3})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 5",3})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 20",4})
+
+	assert.Equal(raftLeader.lastIncludedIdx,0)
+	assert.Equal(raftLeader.lastIncludedTerm,0)
+
+	raftLeader.trimLogAt(1)
+
+	assert.Equal(raftLeader.lastIncludedIdx, 1)
+	assert.Equal(raftLeader.lastIncludedTerm, 3)
+	assert.Equal(raftLeader.getLastLogIdx(),3)
+	assert.Equal(raftLeader.getLastLogTerm(), 4)
+}
+
+func TestRaftSnapshotTrimEntireLogsNoSnapshot(t * testing.T) {
+	raftLeader := generateRaftLaderWithYLogs(t,0)
+	assert := assert.New(t)
+
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write Y -> 7",3})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 5",3})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 20",4})
+
+	assert.Equal(raftLeader.lastIncludedIdx,0)
+	assert.Equal(raftLeader.lastIncludedTerm,0)
+
+	raftLeader.trimLogAt(3)
+
+	assert.Equal(raftLeader.lastIncludedIdx, 3)
+	assert.Equal(raftLeader.lastIncludedTerm, 4)
+	assert.Equal(raftLeader.getLastLogIdx(),3)
+	assert.Equal(raftLeader.getLastLogTerm(), 4)
+}
+
+func TestRaftSnapshotTrimLogExistingSnapshot(t * testing.T) {
+	raftLeader := generateRaftLaderWithYLogs(t,0)
+	assert := assert.New(t)
+
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write Y -> 7",3})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 5",3})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 20",4})
+
+	assert.Equal(raftLeader.lastIncludedIdx,0)
+	assert.Equal(raftLeader.lastIncludedTerm,0)
+
+	raftLeader.trimLogAt(1)
+
+	assert.Equal(raftLeader.lastIncludedIdx, 1)
+	assert.Equal(raftLeader.lastIncludedTerm, 3)
+	assert.Equal(raftLeader.getLastLogIdx(),3)
+	assert.Equal(raftLeader.getLastLogTerm(), 4)
+
+	raftLeader.trimLogAt(3)
+	assert.Equal(raftLeader.lastIncludedIdx, 3)
+	assert.Equal(raftLeader.lastIncludedTerm, 4)
+	assert.Equal(raftLeader.getLastLogIdx(),3)
+	assert.Equal(raftLeader.getLastLogTerm(), 4)
+}
