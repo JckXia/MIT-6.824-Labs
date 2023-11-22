@@ -187,6 +187,11 @@ func (rf *Raft) readPersist(data []byte) {
 }
 
 
+func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply)bool{
+	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
+	return ok
+}
+
 //
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
@@ -236,8 +241,6 @@ func (rf *Raft) getLogAtIndex(logIdx int) Log {
 	}
 	
 	adjustedIdx := logIdx - rf.lastIncludedIdx
-	// adjustedIdx = 1, 
-	// logs = [{Stub,0}]
 
 	if adjustedIdx >= 0 && adjustedIdx < len(rf.logs) {
 		return rf.logs[adjustedIdx]
@@ -307,7 +310,6 @@ func (rf *Raft) trimLogAt(prefix int) {
 	lastInclTerm := rf.getLogTermAtIndex(prefix)
 
 	internalLogPtr := prefix - rf.lastIncludedIdx + 1
-	
 	
 	newLogSlice := []Log{Log{true, "Stub", 0}}
 	shrunkenSlice := rf.logs[internalLogPtr:]

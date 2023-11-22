@@ -138,7 +138,7 @@ func TestRaftSnapshotTrimEntireLogsNoSnapshot(t * testing.T) {
 	assert.Equal(raftLeader.lastIncludedTerm,0)
 
 	raftLeader.trimLogAt(3)
-
+ 
 	assert.Equal(raftLeader.lastIncludedIdx, 3)
 	assert.Equal(raftLeader.lastIncludedTerm, 4)
 	assert.Equal(raftLeader.getLastLogIdx(),3)
