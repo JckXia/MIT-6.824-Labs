@@ -218,8 +218,12 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	}
 }
 
+// Question: What should we do with the lastApplied pointer?
 func (rf * Raft) sendSnapshotApplyMsg(msg ApplyMsg) {
+	rf.mu.Lock()
 	rf.applyCh <- msg
+	rf.commitIndex = max(rf.commitIndex, rf.lastIncludedIdx)
+	rf.mu.Unlock()	
 }
 //
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
