@@ -498,7 +498,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.LogConsistent = false
  
 		if rf.getLastLogIdx() < args.PrevLogIndex {
-			reply.Xlen = rf.getLastLogIdx()
+			// This is the case where the follower's log is too short.
+			//   -> However, we should probably set the reply.Xlen to rf.getLastLogIdx() + 1
+			//
+			reply.Xlen = rf.getLastLogIdx() + 1
 		} else {
 			conflict_term := rf.getLogTermAtIndex(args.PrevLogIndex)
 			first_idx_with_conflict := rf.lookupFirstEntryWithTerm(conflict_term)
