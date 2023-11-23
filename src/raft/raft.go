@@ -894,6 +894,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		
 		if args.PrevLogTerm == LOG_TRUNCATED || (args.PrevLogTerm > 0 && args.PrevLogTerm == rf.lastIncludedTerm) {
 			// args 
+			fmt.Println("Sending install snapshot?")
 			installSnapshotArg := InstallSnapshotArgs{rf.currentTerm, rf.me, rf.lastIncludedIdx, rf.lastIncludedTerm, rf.persister.ReadSnapshot()}
 			installSnapshotReply := InstallSnapshotReply{}
 			go rf.sendInstallSnapshot(server, &installSnapshotArg, &installSnapshotReply)
@@ -986,7 +987,8 @@ func (rf *Raft) lifeCycleManager() {
 			for rf.lastApplied < rf.commitIndex {
 				rf.lastApplied++
 				logEntryToCommit := rf.getLogAtIndex(rf.lastApplied)
-				applyMsg := ApplyMsg{true, logEntryToCommit.Command, rf.lastApplied, true,nil, 0,0}	
+				applyMsg := ApplyMsg{true, logEntryToCommit.Command, rf.lastApplied, false,nil, 0,0}	
+ 
 				DebugP(dCommit, "S%d applying log (%s) at term %d, CI %d, isLeader: %v", rf.me, serializeLog(logEntryToCommit) , rf.currentTerm, rf.lastApplied, rf.nodeStatus == Leader)
 				rf.applyCh <- applyMsg
 			} 

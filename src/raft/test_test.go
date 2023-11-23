@@ -1023,13 +1023,16 @@ const MAXLOGSIZE = 2000
 func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash bool) {
 	iters := 30
 	servers := 3
+ 
 	cfg := make_config(t, servers, !reliable, true)
 	defer cfg.cleanup()
 
 	cfg.begin(name)
-
+ 
 	cfg.one(rand.Int(), servers, true)
+
 	leader1 := cfg.checkOneLeader()
+ 
 
 	for i := 0; i < iters; i++ {
 		victim := (leader1 + 1) % servers
@@ -1038,7 +1041,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			sender = (leader1 + 1) % servers
 			victim = leader1
 		}
-
+	 
 		if disconnect {
 			cfg.disconnect(victim)
 			cfg.one(rand.Int(), servers-1, true)
@@ -1047,6 +1050,7 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 			cfg.crash1(victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
+		 
 		// send enough to get a snapshot
 		for i := 0; i < SnapShotInterval+1; i++ {
 			cfg.rafts[sender].Start(rand.Int())
