@@ -145,27 +145,82 @@ func TestRaftSnapshotTrimEntireLogsNoSnapshot(t * testing.T) {
 	assert.Equal(raftLeader.getLastLogTerm(), 4)
 }
 
-func TestRaftSnapshotTrimLogExistingSnapshot(t * testing.T) {
+/****
+	Raft before state:
+
+	logs=[{1,3},{2,3},{3,4},{4,5}]
+
+	Raft after state:
+	
+	logs=[{3,4},{4,5}]
+****/
+func TestRaftSnapshotLogA(t * testing.T) {
 	raftLeader := generateRaftLaderWithYLogs(t,0)
 	assert := assert.New(t)
 
-	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write Y -> 7",3})
-	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 5",3})
-	raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 20",4})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "1",3})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "2",3})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "3",4})
+	raftLeader.logs = append(raftLeader.logs, Log{true,"4",5})
 
 	assert.Equal(raftLeader.lastIncludedIdx,0)
 	assert.Equal(raftLeader.lastIncludedTerm,0)
 
-	raftLeader.trimLogAt(1)
+	raftLeader.lastApplied = 2 // Raft has already applied first two lgos
 
-	assert.Equal(raftLeader.lastIncludedIdx, 1)
+	compactedLog := "1,2"
+	raftLeader.Snapshot(2, []byte(compactedLog))
+
+	assert.Equal(raftLeader.lastIncludedIdx, 2)
 	assert.Equal(raftLeader.lastIncludedTerm, 3)
-	assert.Equal(raftLeader.getLastLogIdx(),3)
-	assert.Equal(raftLeader.getLastLogTerm(), 4)
+	assert.Equal(raftLeader.getLastLogIdx(), 4)
+	assert.Equal(raftLeader.getLastLogTerm(),5)
+}
 
-	raftLeader.trimLogAt(3)
-	assert.Equal(raftLeader.lastIncludedIdx, 3)
-	assert.Equal(raftLeader.lastIncludedTerm, 4)
-	assert.Equal(raftLeader.getLastLogIdx(),3)
-	assert.Equal(raftLeader.getLastLogTerm(), 4)
+func TestRaftSnapshotLogB(t * testing.T) {
+	raftLeader := generateRaftLaderWithYLogs(t,0)
+	assert := assert.New(t)
+
+	raftLeader.logs = append(raftLeader.logs, Log{true, "1",3})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "2",3})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "3",4})
+	raftLeader.logs = append(raftLeader.logs, Log{true,"4",5})
+
+	assert.Equal(raftLeader.lastIncludedIdx,0)
+	assert.Equal(raftLeader.lastIncludedTerm,0)
+
+	raftLeader.lastApplied = 4 // Raft has already applied first two lgos
+
+	compactedLog := "1,2,3,4"
+	raftLeader.Snapshot(4, []byte(compactedLog))
+ 
+	assert.Equal(raftLeader.lastIncludedIdx, 4)
+	assert.Equal(raftLeader.lastIncludedTerm,5)
+	assert.Equal(raftLeader.getLastLogIdx(), 4)
+	assert.Equal(raftLeader.getLastLogTerm(),5)
+
+  	snapshotContent := string(raftLeader.persister.ReadSnapshot())
+ 	
+	assert.Equal(snapshotContent, compactedLog)
+}
+
+func TestRaftSnapshotLogC(t * testing.T) {
+	raftLeader := generateRaftLaderWithYLogs(t,0)
+	assert := assert.New(t)
+
+	raftLeader.logs = append(raftLeader.logs, Log{true, "1",3})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "2",3})
+	raftLeader.logs = append(raftLeader.logs, Log{true, "3",4})
+	raftLeader.logs = append(raftLeader.logs, Log{true,"4",5})
+
+	assert.Equal(raftLeader.lastIncludedIdx,0)
+	assert.Equal(raftLeader.lastIncludedTerm,0)
+
+	raftLeader.lastApplied = 4 // Raft has already applied first two lgos
+	
+	compactedLog := "1"
+	raftLeader.Snapshot(1, []byte(compactedLog))
+
+	assert.Equal(raftLeader.lastIncludedIdx,0)
+
 }
