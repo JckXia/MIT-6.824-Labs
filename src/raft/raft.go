@@ -223,6 +223,16 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 
 		DebugP(dCommit,"S%d has been brought up to speed on %d", server, rf.lastIncludedIdx)
 		DebugP(dCommit,"S%d.matchIndex[S%d]=%d", rf.me, server, rf.matchIndex[server])
+	} else if rf.nodeStatus == Leader {
+		// Handle the OTHER case
+		DebugP(dSnap, "S%d (leader) InstallSnapshot failed, check for third case",rf.me)
+		if reply.PeerLastIncludedIdx <= rf.getLastLogIdx() {
+			if rf.getLogTermAtIndex(reply.PeerLastIncludedIdx) == reply.PeerLastIncludedTerm {
+				rf.matchIndex[server] = reply.PeerLastIncludedIdx
+				rf.nextIndex[server] = rf.matchIndex[server] + 1
+				DebugP(dSnap,"(leader) S%d updated S%d matchindex to %d", rf.me, server, rf.matchIndex[server])
+			}
+		}
 	}
 	
 	return ok
@@ -327,9 +337,15 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		}
 		
 	} else {
-		// Hit this case because
+		// Pretty ugly. But have to do this cause at the moment, the implementation implies a stop-the-world
+		// operation. Thus we'd have to update the matchIndex caller side
 		//	rf.getLastLogIdx() >= args.LastIncludedIndex && args.LastIncludedIndex < rf.lastIncludedIdx
 		DebugP(dSnap, "S%d, (args.LastIncludedIdx: %d), host.commitIndex %d, info: %s", rf.me, args.LastIncludedIndex, rf.commitIndex, rf.printLogInformation())
+		
+		if rf.commitIndex > args.LastIncludedIndex {
+			reply.PeerLastIncludedIdx = rf.lastIncludedIdx
+			reply.PeerLastIncludedTerm = rf.lastIncludedTerm
+		}
 		rf.mu.Unlock()
 	}
 }
@@ -585,6 +601,8 @@ type InstallSnapshotArgs struct {
 type InstallSnapshotReply struct {
 	Term int
 	Success bool
+	PeerLastIncludedIdx int
+	PeerLastIncludedTerm int
 }
 
 //
