@@ -132,6 +132,7 @@ func (rf *Raft) getRaftState() []byte {
 	e.Encode(rf.votedFor)
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.logs)
+	e.Encode(rf.lastApplied)
 	e.Encode(rf.lastIncludedIdx)
 	e.Encode(rf.lastIncludedTerm)
 
@@ -166,11 +167,13 @@ func (rf *Raft) readPersist(data []byte) {
 	 var votedFor int 
 	 var currentTerm int
 	 var raftLogs []Log
+	 var lastApplied int
 	 var lastIncludedIdx int
 	 var lastIncludedTerm int
 	 if d.Decode(&votedFor) != nil || 
 	 	d.Decode(&currentTerm) != nil ||
 		d.Decode(&raftLogs) != nil || 
+		d.Decode(&lastApplied) != nil ||
 		d.Decode(&lastIncludedIdx) != nil ||
 		d.Decode(&lastIncludedTerm) != nil {
 		
@@ -179,8 +182,10 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.votedFor = votedFor
 		rf.currentTerm = currentTerm
 		rf.logs = raftLogs
+		rf.lastApplied = lastApplied
 		rf.lastIncludedIdx = lastIncludedIdx
 		rf.lastIncludedTerm = lastIncludedTerm
+ 
 		DPrintf(LOG_LEVEL_PERSISTENCE,"S erver %d votedfor %d currentTerm %d, log len %d", rf.me, rf.votedFor, rf.currentTerm, len(rf.logs))
 
 	 }
@@ -194,7 +199,8 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 	}
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
+	
+	DebugP(dCommit, "S%d attempts to send an snapshot request (lastInclIdx: %d, lastInclTerm: %d) to %d", rf.me, rf.lastIncludedIdx, rf.lastIncludedTerm, server)
 	if rf.currentTerm != args.Term {
 		return false;
 	}
@@ -203,8 +209,20 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 	if reply.Term > host_term {
 		DebugP(dElection, "S%d steps down for term %d", host_term)
 		rf.setStateToFollower(reply.Term)
-		rf.mu.Unlock() 
+	 
 		return true;
+	}
+	
+	rf.lastContactWithPeer = time.Now()
+	DebugP(dSnap, "S%d (isLeader=%t) received InstallSnapshot(LI: %d, LT: %d) response from %d",rf.me, rf.nodeStatus == Leader, args.LastIncludedIndex, args.LastIncludedTerm, server)
+
+	if rf.nodeStatus == Leader && reply.Success == true { 
+		rf.matchIndex[server] = args.LastIncludedIndex
+		rf.nextIndex[server] = rf.matchIndex[server] + 1
+		DebugP(dSnap,"S%d has been brought up to %d", server, rf.lastIncludedIdx)
+
+		DebugP(dCommit,"S%d has been brought up to speed on %d", server, rf.lastIncludedIdx)
+		DebugP(dCommit,"S%d.matchIndex[S%d]=%d", rf.me, server, rf.matchIndex[server])
 	}
 	
 	return ok
@@ -212,12 +230,12 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	
-	fmt.Println("Installing snapshot from leader")
 	reply.Term = rf.currentTerm
+	reply.Success = false
 
 	if args.Term < rf.currentTerm {
+		rf.mu.Unlock()
 		return
 	}
 
@@ -228,27 +246,101 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 
 	// Don't mess with logs if am leader
 	if rf.nodeStatus == Leader {
+		rf.mu.Unlock()
 		return
 	}
 	
+	DebugP(dCommit,"S%d received InstallSnapshotRPC (LA: %d, LT: %d) request from %d", rf.me,
+	 args.LastIncludedIndex, args.LastIncludedTerm, args.LeaderId)
+	DebugP(dCommit,"S%d current state: (%s)", rf.me, rf.printLogInformation()) 
+	rf.lastContactWithPeer = time.Now()
+	
+	// We have already snapshotted, but respond to update caller state
+	if args.LastIncludedIndex == rf.lastIncludedIdx && args.LastIncludedTerm == rf.lastIncludedTerm {
+		DebugP(dSnap,"S%d already has lastIncludedIdx %d, return Success", rf.me, rf.lastIncludedIdx)
+
+		reply.Success =true
+		rf.mu.Unlock()
+		return
+	}
+
+	// The server was lagging behind
+	//	-> Erase the entire thing
+	//	-> TODO: Refactor
+	if rf.getLastLogIdx() < args.LastIncludedIndex {
+ 
+		rf.lastIncludedIdx = args.LastIncludedIndex
+		rf.lastIncludedTerm = args.LastIncludedTerm
+		rf.lastApplied = args.LastIncludedIndex
+		rf.commitIndex = rf.lastApplied
+
+		rf.logs = []Log{Log{true, string(args.Data), args.LastIncludedTerm}}
+		snapshotApplyMsg := ApplyMsg{false,"", 0, true, args.Data, args.LastIncludedTerm, args.LastIncludedIndex}
+		DebugP(dSnap,"S%d is lagging behind S%d, fast forward to %s, return true", rf.me, args.LeaderId, rf.lastIncludedIdx)
+		rf.persister.SaveStateAndSnapshot(rf.getRaftState(), args.Data)
+		reply.Success = true
+		rf.mu.Unlock()
+		rf.applyCh <- snapshotApplyMsg
+		
+		return
+	}
+	/**
+		if existing log entry has same index/term as snapshot's last included entry, retain log entries 
+		following it
+		-> Discard entire log
+	**/
 	if rf.getLastLogIdx() >= args.LastIncludedIndex  && args.LastIncludedIndex > rf.lastIncludedIdx {
+	//	DebugP(dSnap, "S%d contains lastIncludedIdex %d, term: %d , inclTerm: %d", rf.me, args.LastIncludedIndex, rf.getLogTermAtIndex(args.LastIncludedIndex), args.LastIncludedTerm)
 		if rf.getLogTermAtIndex(args.LastIncludedIndex) == args.LastIncludedTerm {
 			rf.trimLogAt(args.LastIncludedIndex)
-			rf.persister.SaveStateAndSnapshot(rf.getRaftState(), args.Data)
-			
+ 
+			DebugP(dSnap,"S%d is installing snapshot at %d from %d, S%d.logs [%s]", rf.me, args.LastIncludedIndex, args.LeaderId, rf.me,rf.printLogInformation())
+				
 			snapshotApplyMsg := ApplyMsg{false,"", 0, true, args.Data, args.LastIncludedTerm, args.LastIncludedIndex}
-			go rf.sendSnapshotApplyMsg(snapshotApplyMsg, rf.commitIndex, rf.lastIncludedIdx)
+			reply.Success = true
+			rf.lastApplied = args.LastIncludedIndex
+			rf.commitIndex = rf.lastApplied
+ 
+			DebugP(dLast,"S%d discarding log, reset lastApplied to %d", rf.me, rf.lastApplied)
+			rf.persister.SaveStateAndSnapshot(rf.getRaftState(), args.Data)
+			rf.mu.Unlock()
+			rf.applyCh <- snapshotApplyMsg			
+		} else {
+			// Hit this case because the lastIncludedIdx != args.LastIncludedTerm. Doesn't matter. Discard log
+			
+			DebugP(dSnap,"S%d at idx %d is term %d, want %d", rf.me, args.LastIncludedIndex, rf.getLogTermAtIndex(args.LastIncludedIndex), args.LastIncludedTerm)
+			DebugP(dSnap, "S%d log: %s", rf.me, rf.printLogInformation())
+
+			rf.logs = []Log{Log{true, string(args.Data), args.LastIncludedTerm}}
+			rf.lastApplied = args.LastIncludedIndex
+			rf.commitIndex = rf.lastApplied
+			
+			rf.lastIncludedIdx = args.LastIncludedIndex
+			rf.lastIncludedTerm = args.LastIncludedTerm
+
+			snapshotApplyMsg := ApplyMsg{false,"",0,true, args.Data, args.LastIncludedTerm, args.LastIncludedIndex}
+
+			reply.Success = true
+			rf.persister.SaveStateAndSnapshot(rf.getRaftState(), args.Data) 
+			rf.mu.Unlock()
+			rf.applyCh <- snapshotApplyMsg
 		}
+		
+	} else {
+		// Hit this case because
+		//	rf.getLastLogIdx() >= args.LastIncludedIndex && args.LastIncludedIndex < rf.lastIncludedIdx
+		DebugP(dSnap, "S%d, (args.LastIncludedIdx: %d), host.commitIndex %d, info: %s", rf.me, args.LastIncludedIndex, rf.commitIndex, rf.printLogInformation())
+		rf.mu.Unlock()
 	}
 }
 
-// Question: What should we do with the lastApplied pointer?
-func (rf * Raft) sendSnapshotApplyMsg(msg ApplyMsg, currCommitIdx int, lastInclIdx int) {
-	rf.mu.Lock()
-	rf.applyCh <- msg
-	rf.commitIndex = max(currCommitIdx, lastInclIdx)
-	rf.mu.Unlock()	
+func (rf * Raft) printLogInformation() string {
+	logMsg := serializeLogContents(rf.logs)
+
+	retString := fmt.Sprintf("lastInclIdx: %d, lastInclTerm: %d, logs: [%s]", rf.lastIncludedIdx, rf.lastIncludedTerm, logMsg)
+	return retString
 }
+
 //
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
@@ -286,7 +378,8 @@ func (rf *Raft) getInternalLogIdx(logIdx int) int {
 	if adjustedIdx >= 0 && adjustedIdx < len(rf.logs) {
 		return adjustedIdx
 	}
-	return 0
+	panicMsg := fmt.Sprintf("S%d Index %d is out of range, lastInc %d, adj: %d, logs:[%s]", rf.me, logIdx, rf.lastIncludedIdx, adjustedIdx, rf.printLogInformation())
+	panic(panicMsg)
 }
 
 // We will use this with snapshot (since we'd need to truncate the logs)
@@ -302,7 +395,8 @@ func (rf *Raft) getLogAtIndex(logIdx int) Log {
 	if adjustedIdx >= 0 && adjustedIdx < len(rf.logs) {
 		return rf.logs[adjustedIdx]
 	} 
-	panicMsg := fmt.Sprintf("Index %d is out of range, lastInc %d, adj: %d, logs:[%s]", logIdx, rf.lastIncludedIdx, adjustedIdx, serializeLogContents(rf.logs))
+	
+	panicMsg := fmt.Sprintf("S%d Index %d is out of range, lastInc %d, adj: %d, logs:[%s]", rf.me, logIdx, rf.lastIncludedIdx, adjustedIdx, rf.printLogInformation())
 	panic(panicMsg)
 }
 
@@ -314,11 +408,12 @@ func (rf *Raft) getLogTermAtIndex(logIdx int) int {
 	if logIdx == rf.lastIncludedIdx {
 		return rf.lastIncludedTerm
 	}
+
 	adjustedIdx := logIdx - rf.lastIncludedIdx
 	if adjustedIdx >= 0 && adjustedIdx < len(rf.logs) {
 		return rf.logs[adjustedIdx].CommandTerm
 	}
-	panicMsg := fmt.Sprintf("Index %d is out of range", adjustedIdx)
+	panicMsg := fmt.Sprintf("S%d Index %d is out of range, logs: [%s]", rf.me, adjustedIdx, rf.printLogInformation())
 	panic(panicMsg)
 }
 
@@ -339,10 +434,13 @@ func (rf *Raft) getLastLogTerm() (int) {
 }
 
 // Retrieve all logs starting at some log index
+
+// leader get logs starting at rf.lastIncludedIndex
 func (rf *Raft) getLeaderLogs(startLogIdx int) []Log {
 	if startLogIdx >= rf.getLastLogIdx() + 1 {
 		DPrintf(LOG_LEVEL_WARN, "Warning! attempting to retrieve log out of bound at idx: %d", startLogIdx)
 	}
+
 	adjustedIdx := rf.getInternalLogIdx(startLogIdx)
 	logsToReturn := rf.logs[adjustedIdx:]
 
@@ -363,14 +461,13 @@ func (rf *Raft) trimLogAt(prefix int) {
 	if prefix <= rf.lastIncludedIdx	|| prefix > rf.getLastLogIdx() {
 		return
 	}
-	 
-	lastInclTerm := rf.getLogTermAtIndex(prefix)
-
-	internalLogPtr := prefix - rf.lastIncludedIdx + 1
 	
-	newLogSlice := []Log{Log{true, "Stub", 0}}
-	shrunkenSlice := rf.logs[internalLogPtr:]
-
+	lastInclTerm := rf.getLogTermAtIndex(prefix)
+	internalLogPtr := prefix - rf.lastIncludedIdx
+	
+	newLogSlice := []Log{Log{true, rf.logs[internalLogPtr].Command, lastInclTerm}}
+	shrunkenSlice := rf.logs[internalLogPtr + 1:]
+ 
 	mergedSlice := make([]Log, len(newLogSlice)+len(shrunkenSlice))
 	copy(mergedSlice, newLogSlice)
 	copy(mergedSlice[len(newLogSlice):], shrunkenSlice)
@@ -425,28 +522,28 @@ func (rf * Raft) printLogContent() {
 // ********************************************************//
 
 
-// the service says it has created a snapshot that has
-// all info up to and including index. this means the
-// service no longer needs the log through (and including)
-// that index. Raft should now trim its log as much as possible.
+// A raft host will only Snapshot up-to-and-include some index, iff
+//	-> the index is greater than the host.lastIncludedIdx
+//		-> Don't fallback to an older snapshot
+//	-> equal to the host.commitINdex
+//		-> Only snapshot if index has already been applied
+//	-> index is within the range
+// Reject otherwise
+
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
+ 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
-	/**
-		If the snapshot Index is
-			-> Smaller/equal to last inclued index
-			-> does not equal to the commitIndex
-			-> beyond the index of local log
-		we ignore the snapshot request and return
-	**/
-	 
 	if index <= rf.lastIncludedIdx || index != rf.lastApplied || rf.getLastLogIdx() < index {
 		return
 	}
-	
+
+	DebugP(dCommit, "S%d received snapshot request %d, lastApplied %d, lastInclIdx: %d, logs:[%s]", rf.me, index, rf.lastApplied, rf.lastIncludedIdx, rf.printLogInformation())
+ 
 	rf.trimLogAt(index)
+	DebugP(dCommit, "S%d post trim data: LastApplied: %d, lastInlcudedIdx: %d , logs: [%s]", rf.me, rf.lastApplied, rf.lastIncludedIdx, rf.printLogInformation())
+	// This state persistence logic is probably incorrect. TODO fix
 	raftstate := rf.getRaftState()
 	rf.persister.SaveStateAndSnapshot(raftstate, snapshot)
 }
@@ -487,6 +584,7 @@ type InstallSnapshotArgs struct {
 
 type InstallSnapshotReply struct {
 	Term int
+	Success bool
 }
 
 //
@@ -580,7 +678,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Xterm = -1
 	reply.XIndex = -1
 	reply.Xlen = -1
-
+	DebugP(dReplica,"S%d received AE from S%d", rf.me, args.LeaderId)
 	if candidate_term < host_term {
 		DebugP(dElection,"Reject AE from Leader %d due to term mismatch", args.LeaderId)
 		reply.Success = false
@@ -594,6 +692,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	if rf.serverContainsLeaderLog(args.PrevLogIndex, args.PrevLogTerm) == false {
+		DebugP(dReplica,"S%d conflicts with index on index %d, term %d",rf.me, args.PrevLogIndex,args.PrevLogTerm)
+		DebugP(dReplica,"S%d state: [%s]", rf.me, rf.printLogInformation())
+
 		// TODO: With snap shots we may need to detect when InstallingSnapShot is needed
 		rf.lastContactWithPeer = time.Now()
 		rf.leaderId = args.LeaderId
@@ -627,8 +728,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			lastNewLogIdx := args.PrevLogIndex + len(args.Entries)
 			rf.commitIndex = min(args.LeaderCommit, lastNewLogIdx)
 			DebugP(dCommit, "S%d set commit index to %d", rf.me,  rf.commitIndex)
-			DebugP(dCommit, "S%d recv logs [%s] from leader %d, T: %d, prevLogIdx: %d", rf.me, serializeLogContents(args.Entries), args.LeaderId, args.Term, args.PrevLogIndex)
-			DebugP(dCommit, "S%d log content: [%s]", rf.me, serializeLogContents(rf.logs))
+			DebugP(dCommit, "S%d recv logs [%s] from leader %d, T: %d, prevLogIdx: %d, prevLogTerm: %d", rf.me, serializeLogContents(args.Entries), args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm)
+			DebugP(dCommit, "S%d, lastInclIdx: %d, lastInclTerm: %d, log content: [%s]", rf.me, rf.lastIncludedIdx, rf.lastIncludedTerm, serializeLogContents(rf.logs))
 		}
 
 	} else {
@@ -768,16 +869,30 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 }
 
 
+/**
+
+	prevLogIndex = rf.lastIncludedIdx
+	prevLogTerm = rf.lastIncludedTerm
+**/
 func (rf *Raft) scanNextIndex() {
 	leaderLastLogIdx := rf.getLastLogIdx()
 	for peerId := range rf.peers {
 		if peerId != rf.me && leaderLastLogIdx >= rf.nextIndex[peerId] {
 			prevLogIdx := rf.nextIndex[peerId] - 1
 			prevLogTerm := rf.getLogTermAtIndex(prevLogIdx)
-			entries := rf.getLeaderLogs(rf.nextIndex[peerId])
-			DebugP(dReplica, "Leader %d sending log:[%s] to peer %d", rf.me, serializeLogContents(entries),peerId)
-			initalAppendEntryRPC := AppendEntriesArgs{rf.currentTerm, rf.me, prevLogIdx, prevLogTerm, entries, rf.commitIndex}
-			go rf.sendAppendEntries(peerId, &initalAppendEntryRPC, &AppendEntriesReply{})
+			
+			if prevLogTerm == LOG_TRUNCATED {
+				// DebugP(dSnap, "(SI) L%d to bring S%d up to date with lastInclIdx %d", rf.me, peerId, rf.lastIncludedIdx)
+				// DebugP(dSnap, "(SI) L%d was truncated at %d, L:%s", rf.me, prevLogIdx, rf.printLogInformation())
+				// installSnapshotArg := InstallSnapshotArgs{rf.currentTerm, rf.me, rf.lastIncludedIdx, rf.lastIncludedTerm, rf.persister.ReadSnapshot()}
+				// installSnapshotReply := InstallSnapshotReply{}
+				// go rf.sendInstallSnapshot(peerId,&installSnapshotArg, &installSnapshotReply)
+			} else {
+				entries := rf.getLeaderLogs(rf.nextIndex[peerId])
+				DebugP(dReplica, "Leader %d sending log:[%s] to peer %d", rf.me, serializeLogContents(entries),peerId)
+				initalAppendEntryRPC := AppendEntriesArgs{rf.currentTerm, rf.me, prevLogIdx, prevLogTerm, entries, rf.commitIndex}
+				go rf.sendAppendEntries(peerId, &initalAppendEntryRPC, &AppendEntriesReply{})
+			}
 		}
 	}
 }
@@ -803,7 +918,8 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		return ok
 	}
 	rf.mu.Lock()
-	DebugP(dReplica,"S%d send logs %s to S%d", rf.me, serializeLogContents(args.Entries), server)
+	DebugP(dCommit,"S%d send logs %s to S%d, prevLogIdx: %d", rf.me, serializeLogContents(args.Entries), server, args.PrevLogIndex)
+	DebugP(dCommit,"S%d log Info %s", rf.me, rf.printLogInformation())
 	// Handles cases where we get old RPC reply
 	if rf.currentTerm != args.Term {
 		DebugP(dDrop,"Dropping replies from %d because conflict (CT: %d, ST: %d)", server, rf.currentTerm, args.Term)
@@ -834,7 +950,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		rf.matchIndex[server] = newMatchIndex
 		rf.nextIndex[server] = rf.matchIndex[server] + 1
 		
-	   DebugP(dReplica,"Setting L%d.matchIndex[S%d]=", rf.me, rf.matchIndex[server])
+	   DebugP(dReplica,"Setting S%d.matchIndex[S%d]=%d", rf.me, server,rf.matchIndex[server])
 	   for N := rf.commitIndex + 1; N <= rf.getLastLogIdx(); N++ {
 		 
 			serverReplicatedCount := 0
@@ -892,17 +1008,19 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 		args.PrevLogIndex = rf.nextIndex[server] - 1
 		args.PrevLogTerm = rf.getLogTermAtIndex(args.PrevLogIndex)
 		
-		if args.PrevLogTerm == LOG_TRUNCATED || (args.PrevLogTerm > 0 && args.PrevLogTerm == rf.lastIncludedTerm) {
-			// args 
-			fmt.Println("Sending install snapshot?")
+		if args.PrevLogTerm == LOG_TRUNCATED {
+			DebugP(dSnap, "(SA) L%d bring up S%d up to date with lastInclIdx %d", rf.me, server, rf.lastIncludedIdx)
 			installSnapshotArg := InstallSnapshotArgs{rf.currentTerm, rf.me, rf.lastIncludedIdx, rf.lastIncludedTerm, rf.persister.ReadSnapshot()}
 			installSnapshotReply := InstallSnapshotReply{}
 			go rf.sendInstallSnapshot(server, &installSnapshotArg, &installSnapshotReply)
+			rf.mu.Unlock()
+			time.Sleep(10 * time.Millisecond)
 		} else {
 			args.Entries = rf.getLeaderLogs(rf.nextIndex[server])
+			rf.mu.Unlock()
 		}
 
-		rf.mu.Unlock()		
+		// rf.mu.Unlock()		
 	} else {
 		// replied failed either
 		//	-> reply.Success = false, failed due to server aggrements
@@ -975,6 +1093,19 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func (rf *Raft) dedicatedApplier(applyMsgs [] ApplyMsg) {
+	for _, v := range applyMsgs {
+		rf.applyCh <- v
+		rf.mu.Lock()
+		rf.lastApplied = v.CommandIndex
+		DebugP(dLast, "S%d commiting log, updating lastApplied to %d", rf.me, rf.lastApplied)
+		
+		DebugP(dCommit, "S%d applying log [(%s)] at term %d, CI %d, isLeader: %v", rf.me, v.Command , rf.currentTerm, rf.lastApplied, rf.nodeStatus == Leader)
+		rf.mu.Unlock()
+	}
+}
+
+ 
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) lifeCycleManager() {
@@ -983,19 +1114,21 @@ func (rf *Raft) lifeCycleManager() {
 		rf.mu.Lock()
 		 	
 		if rf.commitIndex > rf.lastApplied {
+			applyMsgs := make([]ApplyMsg,0)
 			
-			for rf.lastApplied < rf.commitIndex {
-				rf.lastApplied++
-				logEntryToCommit := rf.getLogAtIndex(rf.lastApplied)
-				applyMsg := ApplyMsg{true, logEntryToCommit.Command, rf.lastApplied, false,nil, 0,0}	
+			lastApplied := rf.lastApplied
+			DebugP(dLast,"S%d lastApplied is %d", rf.me, rf.lastApplied)
+			for lastApplied < rf.commitIndex {
+				lastApplied++
+				logEntryToCommit := rf.getLogAtIndex(lastApplied)
+				applyMsg := ApplyMsg{true, logEntryToCommit.Command, lastApplied, false,nil, 0,0}	
  
-				DebugP(dCommit, "S%d applying log (%s) at term %d, CI %d, isLeader: %v", rf.me, serializeLog(logEntryToCommit) , rf.currentTerm, rf.lastApplied, rf.nodeStatus == Leader)
-				rf.applyCh <- applyMsg
-			} 
+				applyMsgs = append(applyMsgs, applyMsg)
+			}
+			go rf.dedicatedApplier(applyMsgs) 
 		}
 
 		now := time.Now()
-
 		elapsed := now.Sub(rf.lastContactWithPeer)
 		
 		if rf.nodeStatus == Follower && (elapsed > (time.Duration(rf.electionTimeout) * time.Millisecond)) {
@@ -1116,14 +1249,24 @@ func (rf * Raft) leaderSendHeartBeatMessages(leaderId int, leaderTerm int, nextI
 	emptyEntries := make([]Log,0)
  
 	nextIndexArr := *nextIndex
-	logArr := *logs
 	DebugP(dElection,"L%d broadcast HB for term %d", rf.me, rf.currentTerm)
+
 	for peerId := range rf.peers {
 		if peerId != leaderId {
 			prevLogIdx := nextIndexArr[peerId] - 1
-			prevLogTerm := logArr[prevLogIdx].CommandTerm
-			appendEntriesArgs := AppendEntriesArgs{leaderTerm, leaderId, prevLogIdx, prevLogTerm, emptyEntries, rf.commitIndex}
-			go rf.sendAppendEntries(peerId, &appendEntriesArgs, &AppendEntriesReply{})
+			prevLogTerm := rf.getLogTermAtIndex(prevLogIdx)
+			
+			if prevLogTerm == LOG_TRUNCATED {
+				DebugP(dSnap, "(HB) L%d to bring S%d up to date with lastInclIdx %d", rf.me, peerId, rf.lastIncludedIdx)
+				DebugP(dSnap, "(HB) S%d prevLogIdx %d ", peerId, prevLogIdx)
+				DebugP(dSnap, "(HB) L%d: %s", rf.me, rf.printLogInformation())
+				installSnapshotArg := InstallSnapshotArgs{rf.currentTerm, rf.me, rf.lastIncludedIdx, rf.lastIncludedTerm, rf.persister.ReadSnapshot()}
+				installSnapshotReply := InstallSnapshotReply{}
+				go rf.sendInstallSnapshot(peerId,&installSnapshotArg, &installSnapshotReply)
+			} else {
+				appendEntriesArgs := AppendEntriesArgs{leaderTerm, leaderId, prevLogIdx, prevLogTerm, emptyEntries, rf.commitIndex}
+				go rf.sendAppendEntries(peerId, &appendEntriesArgs, &AppendEntriesReply{})
+			}
 		}
 	}
 }
