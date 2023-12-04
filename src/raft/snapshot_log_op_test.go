@@ -71,6 +71,33 @@ func TestRaftSnapshotLogAcceptLogsFromLeader(t *testing.T) {
 	assert.Equal(raftFollower.getLastLogTerm(),4)
 }
 
+func TestRaftSnapshotGetLeaderLogs(t * testing.T) {
+	assert := assert.New(t)
+	assert.Equal(1,1)
+	
+	raftLeader := generateRaftLaderWithYLogs(t,0)
+
+	raftLeader.lastApplied = 9
+	raftLeader.lastIncludedTerm = 1
+	raftLeader.lastIncludedIdx = 9
+	
+	for i:=1; i<20;i++ {
+		msg := fmt.Sprintf("Write X -> %d", i)
+		raftLeader.logs = append(raftLeader.logs, Log{true,msg, 1})
+	}
+	logs := raftLeader.getLeaderLogs(16)
+
+	fmt.Println(serializeLogContents(logs))
+
+	// raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write Y -> 7",1})
+	// raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 5",1})
+	// raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 20",1})
+
+	// raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write Y -> 7",1})
+	// raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 5",1})
+	// raftLeader.logs = append(raftLeader.logs, Log{true, "Leader Write X -> 20",1})
+
+}
 func TestRaftSnapshotLogOverwriteLogsFromLeader(t *testing.T) {
 	assert := assert.New(t)
 	assert.Equal(1,1)

@@ -21,6 +21,8 @@ const (
 	dVote logTopic = "VOTE"
 	dDrop logTopic = "DROP"
 	dWarn logTopic = "WARN"
+	dLast logTopic = "DLAP"
+	dSnap logTopic = "SNAP"
 )
 
 // Debugging
@@ -50,7 +52,7 @@ func getVerbosity() int {
 
 
 func DebugP(topic logTopic, format string, a...interface{}) {
-	if debugVerbosity >= 1 && topic == dCommit {
+	if debugVerbosity >= 1 && topic == dSnap {
 		log.SetFlags(0)
 		time := time.Since(debugStart).Microseconds()
 		time /= 100
