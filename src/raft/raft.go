@@ -748,6 +748,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if args.LeaderCommit > rf.commitIndex {
 			lastNewLogIdx := args.PrevLogIndex + len(args.Entries)
 			rf.commitIndex = min(args.LeaderCommit, lastNewLogIdx)
+			DebugP(dSnap,"S%d agrees with S%d, idx %d, term %d", rf.me, args.LeaderId, args.PrevLogIndex, args.PrevLogTerm)
+			DebugP(dSnap, "S%d, %s", rf.me, rf.printLogInformation())
 			DebugP(dSnap, "S%d set commit index to %d", rf.me,  rf.commitIndex)
 			DebugP(dSnap, "S%d recv logs [%s] from leader %d, T: %d, prevLogIdx: %d, prevLogTerm: %d", rf.me, serializeLogContents(args.Entries), args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm)
 			//DebugP(dCommit, "S%d, lastInclIdx: %d, lastInclTerm: %d, log content: [%s]", rf.me, rf.lastIncludedIdx, rf.lastIncludedTerm, serializeLogContents(rf.logs))
@@ -768,7 +770,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm int) bool {
 	
 	// Check
-	if leaderPrevLogIdx < 0 {
+	if leaderPrevLogIdx < 0 || leaderPrevLogTerm < 0 {
 		return false
 	}
 
