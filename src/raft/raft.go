@@ -133,6 +133,7 @@ func (rf *Raft) getRaftState() []byte {
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.logs)
 	e.Encode(rf.lastApplied)
+	e.Encode(rf.commitIndex)
 	e.Encode(rf.lastIncludedIdx)
 	e.Encode(rf.lastIncludedTerm)
 
@@ -168,12 +169,14 @@ func (rf *Raft) readPersist(data []byte) {
 	 var currentTerm int
 	 var raftLogs []Log
 	 var lastApplied int
+	 var commitIndex int 
 	 var lastIncludedIdx int
 	 var lastIncludedTerm int
 	 if d.Decode(&votedFor) != nil || 
 	 	d.Decode(&currentTerm) != nil ||
 		d.Decode(&raftLogs) != nil || 
 		d.Decode(&lastApplied) != nil ||
+		d.Decode(&commitIndex) != nil ||
 		d.Decode(&lastIncludedIdx) != nil ||
 		d.Decode(&lastIncludedTerm) != nil {
 		
@@ -182,6 +185,7 @@ func (rf *Raft) readPersist(data []byte) {
 		rf.votedFor = votedFor
 		rf.currentTerm = currentTerm
 		rf.logs = raftLogs
+		rf.commitIndex = commitIndex
 		rf.lastApplied = lastApplied
 		rf.lastIncludedIdx = lastIncludedIdx
 		rf.lastIncludedTerm = lastIncludedTerm
@@ -209,7 +213,6 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 	if reply.Term > host_term {
 		DebugP(dElection, "S%d steps down for term %d", host_term)
 		rf.setStateToFollower(reply.Term)
-	 
 		return true;
 	}
 	
@@ -745,9 +748,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		if args.LeaderCommit > rf.commitIndex {
 			lastNewLogIdx := args.PrevLogIndex + len(args.Entries)
 			rf.commitIndex = min(args.LeaderCommit, lastNewLogIdx)
-			DebugP(dCommit, "S%d set commit index to %d", rf.me,  rf.commitIndex)
-			DebugP(dCommit, "S%d recv logs [%s] from leader %d, T: %d, prevLogIdx: %d, prevLogTerm: %d", rf.me, serializeLogContents(args.Entries), args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm)
-			DebugP(dCommit, "S%d, lastInclIdx: %d, lastInclTerm: %d, log content: [%s]", rf.me, rf.lastIncludedIdx, rf.lastIncludedTerm, serializeLogContents(rf.logs))
+			DebugP(dSnap, "S%d set commit index to %d", rf.me,  rf.commitIndex)
+			DebugP(dSnap, "S%d recv logs [%s] from leader %d, T: %d, prevLogIdx: %d, prevLogTerm: %d", rf.me, serializeLogContents(args.Entries), args.LeaderId, args.Term, args.PrevLogIndex, args.PrevLogTerm)
+			//DebugP(dCommit, "S%d, lastInclIdx: %d, lastInclTerm: %d, log content: [%s]", rf.me, rf.lastIncludedIdx, rf.lastIncludedTerm, serializeLogContents(rf.logs))
 		}
 
 	} else {
@@ -763,7 +766,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 // Implements step 2 of AppendEntries
 //	-> Semantics: If log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
 func (rf *Raft) serverContainsLeaderLog(leaderPrevLogIdx int, leaderPrevLogTerm int) bool {
-	 
+	
+	// Check
+	if leaderPrevLogIdx < 0 {
+		return false
+	}
+
 	if rf.getLastLogIdx() < leaderPrevLogIdx {
 		DebugP(dReplica,"S%d logs (len: %d): [%s] are shorter than leader logs %d", rf.me, len(rf.logs), serializeLogContents(rf.logs), leaderPrevLogIdx)
 		return false
