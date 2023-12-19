@@ -38,12 +38,20 @@ type KVServer struct {
 }
 
 
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+func (kv *KVServer) Get(args *GetArgs, reply *GetReply) bool {
 	// Your code here.
+	if !kv.isLeader() { return false }
+	
 }
 
-func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
+func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) bool{
 	// Your code here.
+	if !kv.isLeader() { return false	}
+}
+
+func (kv *KVServer) isLeader() bool {
+	_, isLeader := kv.rf.GetState()
+	return isLeader
 }
 
 //
