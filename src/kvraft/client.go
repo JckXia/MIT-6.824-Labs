@@ -39,8 +39,19 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	return ""
+	getRequest := GetArgs{key}
+	getReply := GetReply{}
+	for {
+		for i := range ck.servers {
+			ok := cd.servers[i].Call("KVServer.Get", &getRequest, &getReply)
+			if ok {
+				break
+			}
+		}
+	}
+	return getReply.Value
 }
+
 
 //
 // shared by Put and Append.
@@ -54,6 +65,17 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	putRequest := PutAppendArgs{key, value, op}
+	putResponse := PutAppendReply{}
+
+	for {
+		for i:= range ck.servers {
+			ok := cd.servers[i].Call("KVServer.PutAppend", &putRequest. &putResponse)
+			if !ok {
+				break
+			}
+		}
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
