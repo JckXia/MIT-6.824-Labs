@@ -23,6 +23,9 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	OpType string
+	Key string
+	Value string
 }
 
 type KVServer struct {
@@ -38,15 +41,26 @@ type KVServer struct {
 }
 
 
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) bool {
+func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
-	if !kv.isLeader() { return false }
+	if !kv.isLeader() { 
+		reply.Err = ErrWrongLeader
+		return 
+	}
 	
+	reply.Err = OK
+	return
 }
 
-func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) bool{
+func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
-	if !kv.isLeader() { return false	}
+	if !kv.isLeader() { 
+		reply.Err = ErrWrongLeader
+		return 
+	}
+
+	reply.Err = OK
+	return
 }
 
 func (kv *KVServer) isLeader() bool {

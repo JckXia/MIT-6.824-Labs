@@ -3,6 +3,7 @@ package kvraft
 import "6.824/labrpc"
 import "crypto/rand"
 import "math/big"
+ 
 
 
 type Clerk struct {
@@ -43,8 +44,8 @@ func (ck *Clerk) Get(key string) string {
 	getReply := GetReply{}
 	for {
 		for i := range ck.servers {
-			ok := cd.servers[i].Call("KVServer.Get", &getRequest, &getReply)
-			if ok {
+			ck.servers[i].Call("KVServer.Get", &getRequest, &getReply)
+			if getReply.Err == OK {
 				break
 			}
 		}
@@ -70,8 +71,8 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 	for {
 		for i:= range ck.servers {
-			ok := cd.servers[i].Call("KVServer.PutAppend", &putRequest. &putResponse)
-			if !ok {
+			ck.servers[i].Call("KVServer.PutAppend", &putRequest, &putResponse)
+			if putResponse.Err == OK {
 				break
 			}
 		}
