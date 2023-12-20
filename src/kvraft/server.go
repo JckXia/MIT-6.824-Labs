@@ -62,31 +62,32 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Unlock()
 
 	//TODO Loop/range till uuid found?
-//	getMsg := <- kv.getConsensusChan
+	getMsg := <- kv.getConsensusChan
 
 
-	for {
-		select {
-		case getMsg := <- kv.getConsensusChan:
-				kv.mu.Lock()
-				//fmt.Println("Message!")
-				if getMsg.Key == args.Key {
-					reply.Value =  kv.store[getMsg.Key]
-				}
-				reply.Err = OK
-				kv.mu.Unlock()
-		default:
-			
-			return 
-		}
-	}
+	// for {
+	// 	select {
+	// 	case getMsg := <- kv.getConsensusChan:
+	// 			kv.mu.Lock()
+	// 			//fmt.Println("Message!")
+	// 			if getMsg.Key == args.Key {
+	// 				reply.Value =  kv.store[getMsg.Key]
+	// 			}
+	// 			reply.Err = OK
+	// 			kv.mu.Unlock()
+	// 	default:
+	// 		fmt.Println("Returning to get caller")
+	// 		reply.Err = OK
+	// 		return 
+	// 	}
+	// }
 
 	// for getMsg := range kv.getConsensusChan {
-	// 	kv.mu.Lock()
-	// 	if getMsg.Key == args.Key {
-	// 		reply.Value = kv.store[getMsg.Key]
-	// 	}
-	// 	kv.mu.Unlock()
+		kv.mu.Lock()
+		if getMsg.Key == args.Key {
+			reply.Value = kv.store[getMsg.Key]
+		}
+		kv.mu.Unlock()
 	// }
  
 	// kv.mu.Lock()
@@ -129,42 +130,46 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.mu.Unlock()
 
 	fmt.Println("Wait for append msg")
-	// putAppendMsg := <- kv.putConensusChan
+	putAppendMsg := <- kv.putConensusChan
+
+
+	kv.mu.Lock()
+	fmt.Println("PUT MSG received")
+	if putAppendMsg.OpType == args.Op && putAppendMsg.Key == args.Key && putAppendMsg.Value == args.Value {
+		switch putAppendMsg.OpType {
+		case "Put":
+			kv.store[putAppendMsg.Key] = putAppendMsg.Value
+		case "Append":
+			kv.store[putAppendMsg.Key] += putAppendMsg.Value
+	}
+	}
+
+	reply.Err = OK
+	kv.mu.Unlock()
 
 	// TODO: Not sure if this is a good idea tbh. 
 
-	for {
-		select {
-		case putAppendMsg := <- kv.putConensusChan:
-				kv.mu.Lock()
-				fmt.Println("Message!")
-				switch putAppendMsg.OpType {
-					case "Put":
-						kv.store[args.Key] = args.Value
-					case "Append":
-						kv.store[args.Key] += args.Value
-				}
-				reply.Err = OK
-				kv.mu.Unlock()
-		default:
-			
-			return 
-		}
-	}
-	// for putAppendMsg := range kv.putConensusChan {
-	// 	kv.mu.Lock()
-	// 	switch putAppendMsg.OpType {
-	// 		case "Put":
-	// 			kv.store[args.Key] = args.Value
-	// 		case "Append":
-	// 			kv.store[args.Key] += args.Value
-	// 	}
-	// 	kv.mu.Unlock()
-	// }
-
+	// for {
+	// 	case putAppendMsg := <- kv.putConensusChan:
+	// 			kv.mu.Lock()
+	// 			fmt.Println("PUT MSG received")
+	// 			if putAppendMsg.OpType == args.Op && putAppendMsg.Key == args.Key && putAppendMsg.Value == args.Value {
+	// 				switch putAppendMsg.OpType {
+	// 				case "Put":
+	// 					kv.store[putAppendMsg.Key] = putAppendMsg.Value
+	// 				case "Append":
+	// 					kv.store[putAppendMsg.Key] += putAppendMsg.Value
+	// 			}
+	// 			}
  
-	
-	 	
+	// 			reply.Err = OK
+	// 			kv.mu.Unlock()
+	// 	default:
+	// 		reply.Err = OK
+	// 		return 
+	// 	}
+	// }
+ 
 	fmt.Printf("Append request processed by leader %d \n", kv.me)
 	reply.Err = OK
 	return
