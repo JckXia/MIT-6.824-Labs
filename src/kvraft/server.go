@@ -7,6 +7,7 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	 "fmt"
 )
 
 const Debug = false
@@ -35,30 +36,136 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
 
+	getConsensusChan chan Op
+	putConensusChan chan Op
 	maxraftstate int // snapshot if log grows this big
 
+	store map[string]string
 	// Your definitions here.
 }
 
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+ 
+ 
 	if !kv.isLeader() { 
 		reply.Err = ErrWrongLeader
 		return 
 	}
+		// Your code here.
+	fmt.Printf("Get request received by leader %d \n", kv.me)
+	kv.mu.Lock()
 	
+	opMsg := Op{"Get", args.Key,""}
+	kv.rf.Start(opMsg)
+	
+	kv.mu.Unlock()
+
+	//TODO Loop/range till uuid found?
+//	getMsg := <- kv.getConsensusChan
+
+
+	for {
+		select {
+		case getMsg := <- kv.getConsensusChan:
+				kv.mu.Lock()
+				//fmt.Println("Message!")
+				if getMsg.Key == args.Key {
+					reply.Value =  kv.store[getMsg.Key]
+				}
+				reply.Err = OK
+				kv.mu.Unlock()
+		default:
+			
+			return 
+		}
+	}
+
+	// for getMsg := range kv.getConsensusChan {
+	// 	kv.mu.Lock()
+	// 	if getMsg.Key == args.Key {
+	// 		reply.Value = kv.store[getMsg.Key]
+	// 	}
+	// 	kv.mu.Unlock()
+	// }
+ 
+	// kv.mu.Lock()
+	// reply.Value = kv.store[getMsg.Key]
+
+	// kv.mu.Unlock()
+	
+	fmt.Printf("Get request processed by leader %d \n", kv.me)
 	reply.Err = OK
 	return
 }
 
+func serializePutAppendArgs(args *PutAppendArgs) string {
+	s := fmt.Sprintf("(K: %s, V: %s, OP: %s)", args.Key, args.Value, args.Op)
+	return s
+}
+
+func serializeOpMsg(msg Op) string {
+	s := fmt.Sprintf("(K: %s, V: %s, OpTye: %s)", msg.Key, msg.Value, msg.OpType)
+	return s
+}
+
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+ 
+ 
 	if !kv.isLeader() { 
 		reply.Err = ErrWrongLeader
 		return 
 	}
 
+	fmt.Printf("Append request %s received by leader %d \n", serializePutAppendArgs(args), kv.me)
+ 
+	opType := args.Op 
+	kv.mu.Lock()
+
+ 
+	opLog := Op{opType, args.Key, args.Value}
+	kv.rf.Start(opLog)
+	kv.mu.Unlock()
+
+	fmt.Println("Wait for append msg")
+	// putAppendMsg := <- kv.putConensusChan
+
+	// TODO: Not sure if this is a good idea tbh. 
+
+	for {
+		select {
+		case putAppendMsg := <- kv.putConensusChan:
+				kv.mu.Lock()
+				fmt.Println("Message!")
+				switch putAppendMsg.OpType {
+					case "Put":
+						kv.store[args.Key] = args.Value
+					case "Append":
+						kv.store[args.Key] += args.Value
+				}
+				reply.Err = OK
+				kv.mu.Unlock()
+		default:
+			
+			return 
+		}
+	}
+	// for putAppendMsg := range kv.putConensusChan {
+	// 	kv.mu.Lock()
+	// 	switch putAppendMsg.OpType {
+	// 		case "Put":
+	// 			kv.store[args.Key] = args.Value
+	// 		case "Append":
+	// 			kv.store[args.Key] += args.Value
+	// 	}
+	// 	kv.mu.Unlock()
+	// }
+
+ 
+	
+	 	
+	fmt.Printf("Append request processed by leader %d \n", kv.me)
 	reply.Err = OK
 	return
 }
@@ -89,6 +196,25 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
+func (kv *KVServer) readFromApplyCh() {
+	for kv.killed() == false {
+		appliedMsg := <- kv.rf.GetApplyCh()
+		// commitedOperation := appliedMsg.Command
+		commitedOpLog := appliedMsg.Command.(Op)
+		// fmt.Println(operationLog.OpType)
+		fmt.Printf("Msg arrived! %s\n", serializeOpMsg(commitedOpLog))
+		//DebugP(dKv, "Applied msg received! %s", commitedOpLog.OpType)
+		switch commitedOpLog.OpType {
+			case "Get":
+				kv.getConsensusChan <- commitedOpLog
+			case "Put":
+				kv.putConensusChan <- commitedOpLog
+			case "Append":
+				kv.putConensusChan <- commitedOpLog		
+		}
+	}
+}
+
 //
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
@@ -107,17 +233,19 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
-
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
-
+	kv.store = make(map[string]string)
 	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.getConsensusChan = make(chan Op)
+	kv.putConensusChan = make(chan Op)
+
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
-
+	go kv.readFromApplyCh()
 	return kv
 }
