@@ -1124,12 +1124,12 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) dedicatedApplier(applyMsgs [] ApplyMsg) {
 	for _, v := range applyMsgs {
 		rf.applyCh <- v
-		rf.mu.Lock()
-		rf.lastApplied = v.CommandIndex
-		DebugP(dLast, "S%d commiting log, updating lastApplied to %d", rf.me, rf.lastApplied)
+		// rf.mu.Lock()
+		// rf.lastApplied = v.CommandIndex
+		// DebugP(dLast, "S%d commiting log, updating lastApplied to %d", rf.me, rf.lastApplied)
 		
-		DebugP(dCommit, "S%d applying log [(%s)] at term %d, CI %d, isLeader: %v", rf.me, v.Command , rf.currentTerm, rf.lastApplied, rf.nodeStatus == Leader)
-		rf.mu.Unlock()
+		// DebugP(dSnap, "S%d applying log [(%s)] at term %d, CI %d, isLeader: %v, msgLen: %d", rf.me, v.Command , rf.currentTerm, rf.lastApplied, rf.nodeStatus == Leader, len(applyMsgs))
+		// rf.mu.Unlock()
 	}
 }
 
@@ -1148,6 +1148,7 @@ func (rf *Raft) lifeCycleManager() {
 			DebugP(dLast,"S%d lastApplied is %d", rf.me, rf.lastApplied)
 			for lastApplied < rf.commitIndex {
 				lastApplied++
+				rf.lastApplied++
 				logEntryToCommit := rf.getLogAtIndex(lastApplied)
 				applyMsg := ApplyMsg{true, logEntryToCommit.Command, lastApplied, false,nil, 0,0}	
  
@@ -1358,6 +1359,10 @@ func (rf * Raft) bootStrapState(hostServerId int) {
 
 	rf.lastIncludedIdx = 0
 	rf.lastIncludedTerm = 0
+}
+
+func (rf *Raft) GetApplyCh() chan ApplyMsg {
+	return rf.applyCh
 }
 //
 // the service or tester wants to create a Raft server. the ports

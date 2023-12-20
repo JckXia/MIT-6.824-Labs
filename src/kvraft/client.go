@@ -3,6 +3,7 @@ package kvraft
 import "6.824/labrpc"
 import "crypto/rand"
 import "math/big"
+import "fmt"
  
 
 
@@ -45,12 +46,15 @@ func (ck *Clerk) Get(key string) string {
 	for {
 		for i := range ck.servers {
 			ck.servers[i].Call("KVServer.Get", &getRequest, &getReply)
+		 
 			if getReply.Err == OK {
-				break
+				fmt.Println("CLI: Get response returned and is ok")
+				return getReply.Value
 			}
 		}
 	}
-	return getReply.Value
+	 
+	return ""
 }
 
 
@@ -73,10 +77,12 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		for i:= range ck.servers {
 			ck.servers[i].Call("KVServer.PutAppend", &putRequest, &putResponse)
 			if putResponse.Err == OK {
-				break
+				fmt.Println("CLI: Put returned and is ok")
+				return
 			}
 		}
 	}
+//	fmt.Println("PUT returned!")
 }
 
 func (ck *Clerk) Put(key string, value string) {
