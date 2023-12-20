@@ -5,8 +5,14 @@ const (
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongLeader = "ErrWrongLeader"
 )
-
 type Err string
+
+
+const (
+	Append     = "Append"
+	Get        = "Get"
+	Put        = "Put"
+)
 
 // Put or Append
 type PutAppendArgs struct {
