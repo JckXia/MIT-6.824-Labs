@@ -3,12 +3,14 @@ package kvraft
 import "6.824/labrpc"
 import "crypto/rand"
 import "math/big"
-// import "fmt"
+ 
  
 
 
 type Clerk struct {
+	clientId int64
 	servers []*labrpc.ClientEnd
+	seqNum int
 	// You will have to modify this struct.
 }
 
@@ -24,8 +26,11 @@ func (ck *Clerk) scheduleNextServer(clientId int) int {
 }
 
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
+ 
 	ck := new(Clerk)
+	ck.clientId = nrand()
 	ck.servers = servers
+	ck.seqNum = 0
 	// You'll have to add code here.
 	return ck
 }
@@ -45,7 +50,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	getRequest := GetArgs{key}
+	getRequest := GetArgs{ck.clientId, ck.seqNum, key}
 	getReply := GetReply{}
 	serverId := 0
  	 
@@ -57,13 +62,11 @@ func (ck *Clerk) Get(key string) string {
 		}
 		serverId = ck.scheduleNextServer(serverId)
 	}
-
+	ck.seqNum++
 	return getReply.Value
 }
 
  
-
-
 //
 // shared by Put and Append.
 //
@@ -76,7 +79,7 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	putRequest := PutAppendArgs{key, value, op}
+	putRequest := PutAppendArgs{ck.clientId, ck.seqNum, key, value, op}
 	putResponse := PutAppendReply{}
 	serverId := 0
  
@@ -88,6 +91,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		}
 		serverId = ck.scheduleNextServer(serverId)
 	}
+	ck.seqNum++
 }
 
 func (ck *Clerk) Put(key string, value string) {
