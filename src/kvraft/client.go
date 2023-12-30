@@ -19,6 +19,10 @@ func nrand() int64 {
 	return x
 }
 
+func (ck *Clerk) scheduleNextServer(clientId int) int {
+	return (clientId + 1) % len(ck.servers)
+}
+
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
@@ -43,19 +47,21 @@ func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
 	getRequest := GetArgs{key}
 	getReply := GetReply{}
-	for {
-		for i := range ck.servers {
-			ck.servers[i].Call("KVServer.Get", &getRequest, &getReply)
-		 
-			if getReply.Err == OK {
-				// fmt.Println("CLI: Get response returned and is ok")
-				return getReply.Value
-			}
+	serverId := 0
+ 	 
+	for getReply.Err != OK {
+		ok := ck.servers[serverId].Call("KVServer.Get", &getRequest, &getReply)
+		
+		if !ok {
+			// Network issues/etc
 		}
+		serverId = ck.scheduleNextServer(serverId)
 	}
-	 
-	return ""
+
+	return getReply.Value
 }
+
+ 
 
 
 //
@@ -72,17 +78,16 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
 	putRequest := PutAppendArgs{key, value, op}
 	putResponse := PutAppendReply{}
+	serverId := 0
+ 
+	for putResponse.Err != OK {
+	
+		ok := ck.servers[serverId].Call("KVServer.PutAppend", &putRequest, &putResponse)
+		if !ok {
 
-	for {
-		for i:= range ck.servers {
-			ck.servers[i].Call("KVServer.PutAppend", &putRequest, &putResponse)
-			if putResponse.Err == OK {
-				// fmt.Println("CLI: Put returned and is ok")
-				return
-			}
 		}
+		serverId = ck.scheduleNextServer(serverId)
 	}
-//	fmt.Println("PUT returned!")
 }
 
 func (ck *Clerk) Put(key string, value string) {
@@ -91,3 +96,5 @@ func (ck *Clerk) Put(key string, value string) {
 func (ck *Clerk) Append(key string, value string) {
 	ck.PutAppend(key, value, "Append")
 }
+
+
