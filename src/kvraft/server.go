@@ -29,6 +29,12 @@ type Op struct {
 	Value string
 }
 
+// Put() commands should have an empty string as value
+type DedupEntry struct {
+	sequenceNum int
+	value string
+}
+
 type KVServer struct {
 	mu      sync.Mutex
 	me      int
@@ -41,8 +47,20 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	store map[string]string
+	dedupTable map[int64]DedupEntry
 	// Your definitions here.
 }
+
+// Operations on the dedupTable
+func (kv *KVServer) getClientEntry(clientId int64) (DedupEntry, bool) {
+	entry, exists := kv.dedupTable[clientId]
+	return entry, exists
+}
+
+func (kv *KVServer) upsertClientEntry(clientId int64, sequenceNum int, value string) {
+	kv.dedupTable[clientId] = DedupEntry{sequenceNum, value}
+}
+
 
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -115,7 +133,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			kv.store[putAppendMsg.Key] = putAppendMsg.Value
 		case "Append":
 			kv.store[putAppendMsg.Key] += putAppendMsg.Value
-	}
+		}
 	}
 
 	reply.Err = OK
