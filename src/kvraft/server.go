@@ -70,7 +70,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 	kv.mu.Unlock()
  
-	
 	//fmt.Printf("Get request processed by leader %d \n", kv.me)
 	reply.Err = OK
 	return

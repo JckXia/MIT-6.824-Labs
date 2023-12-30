@@ -7,13 +7,6 @@ const (
 )
 type Err string
 
-
-const (
-	Append     = "Append"
-	Get        = "Get"
-	Put        = "Put"
-)
-
 // Put or Append
 type PutAppendArgs struct {
 	Key   string
