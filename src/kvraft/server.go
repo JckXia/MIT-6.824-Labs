@@ -48,7 +48,6 @@ type KVServer struct {
 
 	store map[string]string
 	dedupTable map[int64]DedupEntry
-	// Your definitions here.
 }
 
 // Operations on the dedupTable
@@ -61,30 +60,36 @@ func (kv *KVServer) upsertClientEntry(clientId int64, sequenceNum int, value str
 	kv.dedupTable[clientId] = DedupEntry{sequenceNum, value}
 }
 
-
-
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
  
- 
+	
 	if !kv.isLeader() { 
 		reply.Err = ErrWrongLeader
 		return 
 	}
-		// Your code here.
-	//fmt.Printf("Get request received by leader %d \n", kv.me)
+ 
 	kv.mu.Lock()
 	
+	clientEntry, exist := kv.getClientEntry(args.ClientId)
+
+	if exist && clientEntry.sequenceNum >= args.SeqNum {
+		reply.Value = clientEntry.value
+		kv.mu.Unlock()
+		return
+	}
+
 	opMsg := Op{"Get", args.Key,""}
 	kv.rf.Start(opMsg)
 	
 	kv.mu.Unlock()
-
+	
 	//TODO Loop/range till uuid found?
 	getMsg := <- kv.getConsensusChan
 
 	kv.mu.Lock()
 		if getMsg.Key == args.Key {
 			reply.Value = kv.store[getMsg.Key]
+			kv.upsertClientEntry(args.ClientId, args.SeqNum, reply.Value)
 		}
 	kv.mu.Unlock()
  
@@ -116,12 +121,18 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	opType := args.Op 
 	kv.mu.Lock()
 
- 
+	// Dedup
+	clientEntry, exist := kv.getClientEntry(args.ClientId)
+	if exist && clientEntry.sequenceNum >= args.SeqNum {
+		kv.mu.Unlock()
+		return
+	}
+	
 	opLog := Op{opType, args.Key, args.Value}
 	kv.rf.Start(opLog)
 	kv.mu.Unlock()
 
- 
+	
 	putAppendMsg := <- kv.putConensusChan
 
 
@@ -134,6 +145,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		case "Append":
 			kv.store[putAppendMsg.Key] += putAppendMsg.Value
 		}
+		kv.upsertClientEntry(args.ClientId, args.SeqNum,"")
 	}
 
 	reply.Err = OK
@@ -211,6 +223,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
+	kv.dedupTable = make(map[int64]DedupEntry)
 	kv.store = make(map[string]string)
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.getConsensusChan = make(chan Op)
