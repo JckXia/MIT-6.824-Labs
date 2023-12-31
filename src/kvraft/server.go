@@ -24,6 +24,8 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClientId int64
+	SeqNum int
 	OpType string
 	Key string
 	Value string
@@ -78,7 +80,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 
-	opMsg := Op{"Get", args.Key,""}
+	opMsg := Op{args.ClientId, args.SeqNum, "Get", args.Key,""}
 	kv.rf.Start(opMsg)
 	
 	kv.mu.Unlock()
@@ -89,7 +91,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
 		if getMsg.Key == args.Key {
 			reply.Value = kv.store[getMsg.Key]
-			kv.upsertClientEntry(args.ClientId, args.SeqNum, reply.Value)
 		}
 	kv.mu.Unlock()
  
@@ -128,7 +129,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 	
-	opLog := Op{opType, args.Key, args.Value}
+	opLog := Op{args.ClientId, args.SeqNum, opType, args.Key, args.Value}
 	kv.rf.Start(opLog)
 	kv.mu.Unlock()
 
@@ -145,7 +146,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		case "Append":
 			kv.store[putAppendMsg.Key] += putAppendMsg.Value
 		}
-		kv.upsertClientEntry(args.ClientId, args.SeqNum,"")
 	}
 
 	reply.Err = OK
@@ -197,6 +197,7 @@ func (kv *KVServer) readFromApplyCh() {
 			case "Append":
 				kv.putConensusChan <- commitedOpLog		
 		}
+		kv.upsertClientEntry(commitedOpLog.ClientId, commitedOpLog.SeqNum, commitedOpLog.Value)
 	}
 }
 
